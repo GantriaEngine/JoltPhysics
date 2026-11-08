@@ -14,9 +14,10 @@ Each pre-reconstruction position constraint adds its intended displacement.
 Velocity reconstruction uses the stored integrated velocity plus the accumulated
 displacement divided by the sub step duration. Edge and tetrahedral volume
 constraints use their correction vectors directly. Dihedral bends and rod
-stretch/shear constraints do the same. Skin and long-range attachment constraints
-assign a target position, so their contribution is the assigned position minus
-the position immediately before that constraint. Rod bend/twist changes rod
+stretch/shear constraints do the same. Skin back-stop and distance clamps, and
+long-range attachment, accumulate their scale-based correction directly while
+retaining their existing target position assignment. A kinematic skin target
+uses the target minus the current position as its displacement. Rod bend/twist changes rod
 orientation, not vertex position, and retains its existing angular velocity
 update.
 

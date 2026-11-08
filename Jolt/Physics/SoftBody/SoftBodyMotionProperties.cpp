@@ -547,7 +547,6 @@ void SoftBodyMotionProperties::ApplySkinConstraints(const SoftBodyUpdateContext 
 	for (const Skinned *s = mSettings->mSkinnedConstraints.data() + inStartIndex, *s_end = mSettings->mSkinnedConstraints.data() + inEndIndex; s < s_end; ++s)
 	{
 		Vertex &vertex = vertices[s->mVertex];
-		Vec3 previous_position = vertex.mPosition;
 		const SkinState &skin_state = skin_states[s->mVertex];
 		float max_distance = s->mMaxDistance * mSkinnedMaxDistanceMultiplier;
 
@@ -569,6 +568,10 @@ void SoftBodyMotionProperties::ApplySkinConstraints(const SoftBodyUpdateContext 
 				{
 					// Push the vertex to the surface of the back stop sphere
 					float delta_len = Sqrt(delta_len_sq);
+					if (mVelocityReconstruction == ESoftBodyVelocityReconstruction::ConstraintDelta)
+						vertex.mConstraintDelta += delta_len > 0.0f?
+							delta * (s->mBackStopRadius / delta_len - 1.0f)
+							: skin_state.mNormal * s->mBackStopRadius;
 					vertex.mPosition = delta_len > 0.0f?
 						center + delta * (s->mBackStopRadius / delta_len)
 						: center + skin_state.mNormal * s->mBackStopRadius;
@@ -582,17 +585,21 @@ void SoftBodyMotionProperties::ApplySkinConstraints(const SoftBodyUpdateContext 
 				float delta_len_sq = delta.LengthSq();
 				float max_distance_sq = Square(max_distance);
 				if (delta_len_sq > max_distance_sq)
-					vertex.mPosition = skin_pos + delta * Sqrt(max_distance_sq / delta_len_sq);
+				{
+					float scale = Sqrt(max_distance_sq / delta_len_sq);
+					if (mVelocityReconstruction == ESoftBodyVelocityReconstruction::ConstraintDelta)
+						vertex.mConstraintDelta += delta * (scale - 1.0f);
+					vertex.mPosition = skin_pos + delta * scale;
+				}
 			}
 		}
 		else
 		{
 			// Kinematic: Just update the vertex position
+			if (mVelocityReconstruction == ESoftBodyVelocityReconstruction::ConstraintDelta)
+				vertex.mConstraintDelta += skin_pos - vertex.mPosition;
 			vertex.mPosition = skin_pos;
 		}
-		// Skinning assigns a target position, so its requested displacement is measured from the prior constraint position.
-		if (mVelocityReconstruction == ESoftBodyVelocityReconstruction::ConstraintDelta)
-			vertex.mConstraintDelta += vertex.mPosition - previous_position;
 	}
 }
 
@@ -726,14 +733,13 @@ void SoftBodyMotionProperties::ApplyLRAConstraints(uint inStartIndex, uint inEnd
 		Vertex &vertex1 = vertices[lra->mVertex[1]];
 
 		Vec3 x0 = vertex0.mPosition;
-		Vec3 x1 = vertex1.mPosition;
 		Vec3 delta = vertex1.mPosition - x0;
 		float delta_len_sq = delta.LengthSq();
 		if (delta_len_sq > Square(lra->mMaxDistance))
 		{
 			vertex1.mPosition = x0 + delta * lra->mMaxDistance / Sqrt(delta_len_sq);
 			if (mVelocityReconstruction == ESoftBodyVelocityReconstruction::ConstraintDelta)
-				vertex1.mConstraintDelta += vertex1.mPosition - x1;
+				vertex1.mConstraintDelta += delta * (lra->mMaxDistance / Sqrt(delta_len_sq) - 1.0f);
 		}
 	}
 }
