@@ -224,6 +224,7 @@ EPhysicsUpdateError PhysicsSystem::Update(float inDeltaTime, int inCollisionStep
 	context.mBodyManager = &mBodyManager;
 	context.mIslandBuilder = &mIslandBuilder;
 	context.mStepDeltaTime = step_delta_time;
+	context.mUpdateDeltaTime = inDeltaTime;
 	context.mWarmStartImpulseRatio = warm_start_impulse_ratio;
 	context.mSteps.resize(inCollisionSteps);
 
@@ -2525,6 +2526,7 @@ void PhysicsSystem::CheckSleepAndUpdateBounds(uint32 inIslandIndex, const Physic
 
 		float time_before_sleep = mPhysicsSettings.mTimeBeforeSleep;
 		float max_movement = mPhysicsSettings.mPointVelocitySleepThreshold * time_before_sleep;
+		float sleep_delta_time = mPhysicsSettings.mUseFullUpdateDeltaForSleep? ioContext->mUpdateDeltaTime : ioContext->mStepDeltaTime;
 
 		for (const BodyID *body_id = bodies_begin; body_id < bodies_end; ++body_id)
 		{
@@ -2534,7 +2536,7 @@ void PhysicsSystem::CheckSleepAndUpdateBounds(uint32 inIslandIndex, const Physic
 			body.CalculateWorldSpaceBoundsInternal();
 
 			// Update sleeping
-			all_can_sleep &= int(body.UpdateSleepStateInternal(ioContext->mStepDeltaTime, max_movement, time_before_sleep));
+			all_can_sleep &= int(body.UpdateSleepStateInternal(sleep_delta_time, max_movement, time_before_sleep));
 
 			// Reset force and torque
 			MotionProperties *mp = body.GetMotionProperties();

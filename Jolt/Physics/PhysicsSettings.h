@@ -101,6 +101,10 @@ struct PhysicsSettings
 	/// the object is allowed to go to sleep. Must be a positive number. (unit: m/s)
 	float		mPointVelocitySleepThreshold = 0.03f;
 
+	/// Use the full PhysicsSystem::Update delta time for the sleep test, which runs only on the last collision step.
+	/// When false, preserve the original behavior of accumulating one collision step per update.
+	bool		mUseFullUpdateDeltaForSleep = false;
+
 	/// By default the simulation is deterministic, it is possible to turn this off by setting this setting to false. This will make the simulation run faster but it will no longer be deterministic.
 	bool		mDeterministicSimulation = true;
 
