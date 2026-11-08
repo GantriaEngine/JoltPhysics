@@ -230,9 +230,13 @@ void SoftBodyRigidAttachment::OnStep(const PhysicsStepListenerContext &inContext
 		return;
 	}
 	soft_velocity_delta = soft_body->GetRotation().Conjugated() * (vertex.mInvMass * impulse);
-	vertex.mVelocity += soft_velocity_delta;
-	inContext.mPhysicsSystem->GetBodyInterfaceNoLock().AddImpulse(mRigidBodyID, -impulse, rigid_point);
-	inContext.mPhysicsSystem->GetBodyInterfaceNoLock().ActivateBody(mSoftBodyID);
+	// BodyInterface::AddImpulse activates an inactive body. A zero impulse must not wake an attachment at rest.
+	if (impulse.GetX() != 0.0f || impulse.GetY() != 0.0f || impulse.GetZ() != 0.0f)
+	{
+		vertex.mVelocity += soft_velocity_delta;
+		inContext.mPhysicsSystem->GetBodyInterfaceNoLock().AddImpulse(mRigidBodyID, -impulse, rigid_point);
+		inContext.mPhysicsSystem->GetBodyInterfaceNoLock().ActivateBody(mSoftBodyID);
+	}
 	mLastImpulseOnSoftBody = impulse;
 	++mAppliedStepCount;
 }
