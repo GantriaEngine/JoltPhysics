@@ -35,6 +35,12 @@ energetically stable in all configurations.
 Unit tests exercise the default mode, a float quantization case, edge and
 volume correction accumulation, dihedral bending, skin clamping, rod stretch,
 long-range attachment, and reconstruction of creation settings from a body.
+A 600-frame mixed constraint regression also combines edge, volume, dihedral,
+skin, LRA, and rod stretch constraints with a prescribed moving skin target.
+That target performs external work, so the regression checks finite, bounded
+position and velocity rather than an energy ceiling. Rod angular velocity is
+still reconstructed from orientation differences by the original algorithm;
+the vertex mode makes no rod angular precision claim.
 
 Contact position projection occurs after velocity reconstruction, as before,
 and deliberately does not enter the current sub step's accumulator. The

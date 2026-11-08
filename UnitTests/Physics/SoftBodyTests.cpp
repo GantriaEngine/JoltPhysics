@@ -226,6 +226,55 @@ TEST_SUITE("SoftBodyTests")
 		CHECK_APPROX_EQUAL(vertex.mVelocity, vertex.mConstraintDelta / context.GetStepDeltaTime(), 1.0e-4f);
 	}
 
+	TEST_CASE("TestConstraintDeltaVelocityMixedConstraintsLongRun")
+	{
+		PhysicsTestContext context(1.0f / 60.0f, 2, 2);
+		context.ZeroGravity();
+		Ref<SoftBodySharedSettings> shared_settings = SoftBodySharedSettings::sCreateCube(2, 1.0f);
+		shared_settings->mVertices[0].mInvMass = 0.0f;
+		for (SoftBodySharedSettings::Edge &edge : shared_settings->mEdgeConstraints)
+			edge.mCompliance = 1.0e-5f;
+		for (SoftBodySharedSettings::Volume &volume : shared_settings->mVolumeConstraints)
+			volume.mCompliance = 1.0e-5f;
+		shared_settings->mDihedralBendConstraints.push_back(SoftBodySharedSettings::DihedralBend(0, 3, 2, 1, 1.0e-4f));
+		shared_settings->CalculateBendConstraintConstants();
+		shared_settings->mLRAConstraints.push_back(SoftBodySharedSettings::LRA(0, 6, 1.5f));
+		shared_settings->mRodStretchShearConstraints.push_back(SoftBodySharedSettings::RodStretchShear(4, 5, 1.0e-5f));
+		shared_settings->CalculateRodProperties();
+		shared_settings->mInvBindMatrices.push_back(SoftBodySharedSettings::InvBind(0, Mat44::sIdentity()));
+		SoftBodySharedSettings::Skinned skinned(7, 0.08f, FLT_MAX, 0.0f);
+		skinned.mWeights[0] = SoftBodySharedSettings::SkinWeight(0, 1.0f);
+		shared_settings->mSkinnedConstraints.push_back(skinned);
+		shared_settings->Optimize();
+
+		SoftBodyCreationSettings settings(shared_settings, RVec3::sZero(), Quat::sIdentity(), Layers::MOVING);
+		settings.mVelocityReconstruction = ESoftBodyVelocityReconstruction::ConstraintDelta;
+		settings.mNumIterations = 8;
+		settings.mLinearDamping = 2.4f;
+		settings.mAllowSleeping = false;
+		settings.mUpdatePosition = false;
+		Body &body = *context.GetBodyInterface().CreateSoftBody(settings);
+		context.GetBodyInterface().AddBody(body.GetID(), EActivation::Activate);
+		SoftBodyMotionProperties *properties = static_cast<SoftBodyMotionProperties *>(body.GetMotionProperties());
+		Mat44 joint = Mat44::sIdentity();
+		properties->SkinVertices(body.GetCenterOfMassTransform(), &joint, 1, true, *context.GetTempAllocator());
+		properties->GetVertex(6).mPosition += Vec3(0, 0.3f, 0.3f);
+		properties->GetVertex(7).mPosition += Vec3(0.2f, 0, 0);
+		for (uint frame = 0; frame < 600; ++frame)
+		{
+			// The moving skin target performs external work, so this test checks bounded physical state, not an energy ceiling.
+			joint = Mat44::sTranslation(Vec3(0.05f * Sin(0.03f * frame), 0, 0));
+			properties->SkinVertices(body.GetCenterOfMassTransform(), &joint, 1, false, *context.GetTempAllocator());
+			context.SimulateSingleStep();
+			for (uint vertex_index = 0; vertex_index < shared_settings->mVertices.size(); ++vertex_index)
+			{
+				const SoftBodyVertex &vertex = properties->GetVertex(vertex_index);
+				CHECK(vertex.mPosition.LengthSq() < 100.0f);
+				CHECK(vertex.mVelocity.LengthSq() < 1.0e8f);
+			}
+		}
+	}
+
 	TEST_CASE("TestBendConstraint")
 	{
 		// Possible values for x3
