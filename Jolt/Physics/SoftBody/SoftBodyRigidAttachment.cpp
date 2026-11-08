@@ -37,16 +37,22 @@ bool SoftBodyRigidAttachment::Connect(PhysicsSystem &inSystem, BodyID inSoftBody
 
 	{
 		BodyLockRead soft_lock(inSystem.GetBodyLockInterface(), inSoftBodyID);
-		BodyLockRead rigid_lock(inSystem.GetBodyLockInterface(), inRigidBodyID);
-		if (!soft_lock.SucceededAndIsInBroadPhase() || !rigid_lock.SucceededAndIsInBroadPhase())
+		if (!soft_lock.SucceededAndIsInBroadPhase())
 			return false;
 
 		const Body &soft_body = soft_lock.GetBody();
-		const Body &rigid_body = rigid_lock.GetBody();
-		if (!soft_body.IsSoftBody() || !rigid_body.IsRigidBody() || !rigid_body.IsDynamic())
+		if (!soft_body.IsSoftBody())
 			return false;
 		const SoftBodyMotionProperties *properties = static_cast<const SoftBodyMotionProperties *>(soft_body.GetMotionProperties());
 		if (inVertexIndex >= properties->GetVertices().size() || properties->GetVertex(inVertexIndex).mInvMass <= 0.0f)
+			return false;
+	}
+	{
+		BodyLockRead rigid_lock(inSystem.GetBodyLockInterface(), inRigidBodyID);
+		if (!rigid_lock.SucceededAndIsInBroadPhase())
+			return false;
+		const Body &rigid_body = rigid_lock.GetBody();
+		if (!rigid_body.IsRigidBody() || !rigid_body.IsDynamic())
 			return false;
 	}
 
