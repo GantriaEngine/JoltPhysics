@@ -450,6 +450,7 @@ SoftBodyCreationSettings Body::GetSoftBodyCreationSettings() const
 	result.mRestitution = GetRestitution();
 	const SoftBodyMotionProperties *mp = static_cast<const SoftBodyMotionProperties *>(mMotionProperties);
 	result.mNumIterations = mp->GetNumIterations();
+	result.mVelocityReconstruction = mp->GetVelocityReconstruction();
 	result.mLinearDamping = mp->GetLinearDamping();
 	result.mMaxLinearVelocity = mp->GetMaxLinearVelocity();
 	result.mGravityFactor = mp->GetGravityFactor();

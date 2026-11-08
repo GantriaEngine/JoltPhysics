@@ -12,6 +12,13 @@
 
 JPH_NAMESPACE_BEGIN
 
+/// Method used to reconstruct soft body vertex velocities after constraint projection.
+enum class ESoftBodyVelocityReconstruction : uint8
+{
+	PositionDifference, ///< Original XPBD position difference divided by the sub step time
+	ConstraintDelta ///< Integrated velocity plus intended constraint displacements divided by the sub step time
+};
+
 /// This class contains the information needed to create a soft body object
 /// Note: Soft bodies are still in development and come with several caveats. Read the Architecture and API documentation for more information!
 class JPH_EXPORT SoftBodyCreationSettings
@@ -59,6 +66,7 @@ public:
 	CollisionGroup		mCollisionGroup;					///< The collision group this body belongs to (determines if two objects can collide)
 
 	uint32				mNumIterations = 5;					///< Number of solver iterations
+	ESoftBodyVelocityReconstruction mVelocityReconstruction = ESoftBodyVelocityReconstruction::PositionDifference; ///< Defaults to original solver behavior
 	float				mLinearDamping = 0.1f;				///< Linear damping: dv/dt = -mLinearDamping * v. Value should be zero or positive and is usually close to 0.
 	float				mMaxLinearVelocity = 500.0f;		///< Maximum linear velocity that a vertex can reach (m/s)
 	float				mRestitution = 0.0f;				///< Restitution when colliding

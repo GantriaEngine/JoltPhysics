@@ -195,6 +195,266 @@ TEST_SUITE("SoftBodyTests")
 		return settings;
 	}
 
+	TEST_CASE("TestConstraintDeltaVelocityAvoidsPositionQuantization")
+	{
+		constexpr float cDeltaTime = 1.0f / (60.0f * 384.0f);
+		Ref<SoftBodySharedSettings> shared_settings = new SoftBodySharedSettings;
+		shared_settings->mVertices.push_back(SoftBodySharedSettings::Vertex(Float3(0, 0, 0), Float3(0, 0, 0), 0.0f));
+		shared_settings->mVertices.push_back(SoftBodySharedSettings::Vertex(Float3(2, 0, 0), Float3(0.003f, 0, 0), 1.0f));
+		shared_settings->mVertices.push_back(SoftBodySharedSettings::Vertex(Float3(0, 1, 0), Float3(0, 0, 0), 0.0f));
+		shared_settings->AddFace(SoftBodySharedSettings::Face(0, 1, 2));
+		shared_settings->Optimize();
+
+		for (ESoftBodyVelocityReconstruction mode : { ESoftBodyVelocityReconstruction::PositionDifference, ESoftBodyVelocityReconstruction::ConstraintDelta })
+		{
+			PhysicsTestContext context(cDeltaTime, 1);
+			context.ZeroGravity();
+			SoftBodyCreationSettings settings(shared_settings, RVec3::sZero(), Quat::sIdentity(), Layers::MOVING);
+			CHECK(settings.mVelocityReconstruction == ESoftBodyVelocityReconstruction::PositionDifference);
+			settings.mVelocityReconstruction = mode;
+			settings.mNumIterations = 1;
+			settings.mLinearDamping = 0.0f;
+			settings.mAllowSleeping = false;
+			settings.mUpdatePosition = false;
+			Body &body = *context.GetBodyInterface().CreateSoftBody(settings);
+			context.GetBodyInterface().AddBody(body.GetID(), EActivation::Activate);
+			SoftBodyMotionProperties *properties = static_cast<SoftBodyMotionProperties *>(body.GetMotionProperties());
+			CHECK(properties->GetVelocityReconstruction() == mode);
+			CHECK(body.GetSoftBodyCreationSettings().mVelocityReconstruction == mode);
+			context.SimulateSingleStep();
+			const SoftBodyVertex &vertex = properties->GetVertex(1);
+			if (mode == ESoftBodyVelocityReconstruction::ConstraintDelta)
+				CHECK_APPROX_EQUAL(vertex.mVelocity.GetX(), 0.003f, 1.0e-7f);
+			else
+				CHECK_APPROX_EQUAL(vertex.mVelocity.GetX(), (vertex.mPosition.GetX() - vertex.mPreviousPosition.GetX()) / cDeltaTime, 1.0e-7f);
+		}
+	}
+
+	TEST_CASE("TestConstraintDeltaVelocityAccumulatesEdgeCorrection")
+	{
+		constexpr float cDeltaTime = 1.0f / 60.0f;
+		Ref<SoftBodySharedSettings> shared_settings = new SoftBodySharedSettings;
+		shared_settings->mVertices.push_back(SoftBodySharedSettings::Vertex(Float3(0, 0, 0), Float3(0, 0, 0), 0.0f));
+		shared_settings->mVertices.push_back(SoftBodySharedSettings::Vertex(Float3(2, 0, 0)));
+		shared_settings->mVertices.push_back(SoftBodySharedSettings::Vertex(Float3(0, 1, 0), Float3(0, 0, 0), 0.0f));
+		shared_settings->AddFace(SoftBodySharedSettings::Face(0, 1, 2));
+		shared_settings->mEdgeConstraints.push_back(SoftBodySharedSettings::Edge(0, 1));
+		shared_settings->CalculateEdgeLengths();
+		shared_settings->Optimize();
+
+		PhysicsTestContext context(cDeltaTime, 1);
+		context.ZeroGravity();
+		SoftBodyCreationSettings settings(shared_settings, RVec3::sZero(), Quat::sIdentity(), Layers::MOVING);
+		settings.mVelocityReconstruction = ESoftBodyVelocityReconstruction::ConstraintDelta;
+		settings.mNumIterations = 1;
+		settings.mLinearDamping = 0.0f;
+		settings.mAllowSleeping = false;
+		settings.mUpdatePosition = false;
+		Body &body = *context.GetBodyInterface().CreateSoftBody(settings);
+		context.GetBodyInterface().AddBody(body.GetID(), EActivation::Activate);
+		SoftBodyMotionProperties *properties = static_cast<SoftBodyMotionProperties *>(body.GetMotionProperties());
+		properties->GetVertex(1).mPosition = Vec3(2.25f, 0, 0);
+		context.SimulateSingleStep();
+
+		const SoftBodyVertex &vertex = properties->GetVertex(1);
+		CHECK_APPROX_EQUAL(vertex.mPosition.GetX(), 2.0f, 1.0e-6f);
+		CHECK_APPROX_EQUAL(vertex.mConstraintDelta.GetX(), -0.25f, 1.0e-6f);
+		CHECK_APPROX_EQUAL(vertex.mVelocity.GetX(), -0.25f / cDeltaTime, 1.0e-5f);
+	}
+
+	TEST_CASE("TestConstraintDeltaVelocityAccumulatesVolumeAndEdgeCorrections")
+	{
+		PhysicsTestContext context;
+		context.ZeroGravity();
+		Ref<SoftBodySharedSettings> shared_settings = SoftBodySharedSettings::sCreateCube(2, 1.0f);
+		SoftBodyCreationSettings settings(shared_settings, RVec3::sZero(), Quat::sIdentity(), Layers::MOVING);
+		settings.mVelocityReconstruction = ESoftBodyVelocityReconstruction::ConstraintDelta;
+		settings.mNumIterations = 1;
+		settings.mLinearDamping = 0.0f;
+		settings.mAllowSleeping = false;
+		settings.mUpdatePosition = false;
+		Body &body = *context.GetBodyInterface().CreateSoftBody(settings);
+		context.GetBodyInterface().AddBody(body.GetID(), EActivation::Activate);
+		SoftBodyMotionProperties *properties = static_cast<SoftBodyMotionProperties *>(body.GetMotionProperties());
+		properties->GetVertex(0).mPosition += Vec3(0.25f, 0.1f, 0);
+		context.SimulateSingleStep();
+
+		bool had_correction = false;
+		for (uint vertex_index = 0; vertex_index < shared_settings->mVertices.size(); ++vertex_index)
+		{
+			const SoftBodyVertex &vertex = properties->GetVertex(vertex_index);
+			had_correction |= vertex.mConstraintDelta.LengthSq() > 0.0f;
+			CHECK_APPROX_EQUAL(vertex.mVelocity, vertex.mIntegratedVelocity + vertex.mConstraintDelta / context.GetStepDeltaTime(), 1.0e-5f);
+		}
+		CHECK(had_correction);
+	}
+
+	TEST_CASE("TestConstraintDeltaVelocityAccumulatesLRA")
+	{
+		PhysicsTestContext context;
+		context.ZeroGravity();
+		Ref<SoftBodySharedSettings> shared_settings = new SoftBodySharedSettings;
+		shared_settings->mVertices.push_back(SoftBodySharedSettings::Vertex(Float3(0, 0, 0), Float3(0, 0, 0), 0.0f));
+		shared_settings->mVertices.push_back(SoftBodySharedSettings::Vertex(Float3(2, 0, 0)));
+		shared_settings->mVertices.push_back(SoftBodySharedSettings::Vertex(Float3(0, 1, 0), Float3(0, 0, 0), 0.0f));
+		shared_settings->AddFace(SoftBodySharedSettings::Face(0, 1, 2));
+		shared_settings->mLRAConstraints.push_back(SoftBodySharedSettings::LRA(0, 1, 2.0f));
+		shared_settings->Optimize();
+		SoftBodyCreationSettings settings(shared_settings, RVec3::sZero(), Quat::sIdentity(), Layers::MOVING);
+		settings.mVelocityReconstruction = ESoftBodyVelocityReconstruction::ConstraintDelta;
+		settings.mNumIterations = 1;
+		settings.mLinearDamping = 0.0f;
+		settings.mAllowSleeping = false;
+		settings.mUpdatePosition = false;
+		Body &body = *context.GetBodyInterface().CreateSoftBody(settings);
+		context.GetBodyInterface().AddBody(body.GetID(), EActivation::Activate);
+		SoftBodyMotionProperties *properties = static_cast<SoftBodyMotionProperties *>(body.GetMotionProperties());
+		properties->GetVertex(1).mPosition = Vec3(2.25f, 0, 0);
+		context.SimulateSingleStep();
+		const SoftBodyVertex &vertex = properties->GetVertex(1);
+		CHECK_APPROX_EQUAL(vertex.mPosition.GetX(), 2.0f, 1.0e-6f);
+		CHECK_APPROX_EQUAL(vertex.mConstraintDelta.GetX(), -0.25f, 1.0e-6f);
+		CHECK_APPROX_EQUAL(vertex.mVelocity.GetX(), -0.25f / context.GetStepDeltaTime(), 1.0e-5f);
+	}
+
+	TEST_CASE("TestConstraintDeltaVelocityAccumulatesDihedralBend")
+	{
+		PhysicsTestContext context;
+		context.ZeroGravity();
+		Ref<SoftBodySharedSettings> shared_settings = new SoftBodySharedSettings;
+		shared_settings->mVertices.push_back(SoftBodySharedSettings::Vertex(Float3(-1, 0, 0), Float3(0, 0, 0), 0.0f));
+		shared_settings->mVertices.push_back(SoftBodySharedSettings::Vertex(Float3(1, 0, 0), Float3(0, 0, 0), 0.0f));
+		shared_settings->mVertices.push_back(SoftBodySharedSettings::Vertex(Float3(0, 0, -1), Float3(0, 0, 0), 0.0f));
+		shared_settings->mVertices.push_back(SoftBodySharedSettings::Vertex(Float3(0, 0, 1)));
+		shared_settings->AddFace(SoftBodySharedSettings::Face(0, 1, 2));
+		shared_settings->AddFace(SoftBodySharedSettings::Face(0, 3, 1));
+		shared_settings->mDihedralBendConstraints.push_back(SoftBodySharedSettings::DihedralBend(0, 1, 2, 3));
+		shared_settings->CalculateBendConstraintConstants();
+		shared_settings->Optimize();
+		SoftBodyCreationSettings settings(shared_settings, RVec3::sZero(), Quat::sIdentity(), Layers::MOVING);
+		settings.mVelocityReconstruction = ESoftBodyVelocityReconstruction::ConstraintDelta;
+		settings.mNumIterations = 1;
+		settings.mLinearDamping = 0.0f;
+		settings.mAllowSleeping = false;
+		settings.mUpdatePosition = false;
+		Body &body = *context.GetBodyInterface().CreateSoftBody(settings);
+		context.GetBodyInterface().AddBody(body.GetID(), EActivation::Activate);
+		SoftBodyMotionProperties *properties = static_cast<SoftBodyMotionProperties *>(body.GetMotionProperties());
+		properties->GetVertex(3).mPosition = Vec3(0, 0.5f, 0.5f);
+		context.SimulateSingleStep();
+		const SoftBodyVertex &vertex = properties->GetVertex(3);
+		CHECK(vertex.mConstraintDelta.LengthSq() > 0.0f);
+		CHECK_APPROX_EQUAL(vertex.mVelocity, vertex.mConstraintDelta / context.GetStepDeltaTime(), 1.0e-4f);
+	}
+
+	TEST_CASE("TestConstraintDeltaVelocityAccumulatesRodStretch")
+	{
+		PhysicsTestContext context;
+		context.ZeroGravity();
+		Ref<SoftBodySharedSettings> shared_settings = new SoftBodySharedSettings;
+		shared_settings->mVertices.push_back(SoftBodySharedSettings::Vertex(Float3(0, 0, 0), Float3(0, 0, 0), 0.0f));
+		shared_settings->mVertices.push_back(SoftBodySharedSettings::Vertex(Float3(0, 0, 1)));
+		shared_settings->mRodStretchShearConstraints.push_back(SoftBodySharedSettings::RodStretchShear(0, 1));
+		shared_settings->CalculateRodProperties();
+		shared_settings->Optimize();
+		SoftBodyCreationSettings settings(shared_settings, RVec3::sZero(), Quat::sIdentity(), Layers::MOVING);
+		settings.mVelocityReconstruction = ESoftBodyVelocityReconstruction::ConstraintDelta;
+		settings.mNumIterations = 1;
+		settings.mLinearDamping = 0.0f;
+		settings.mAllowSleeping = false;
+		settings.mUpdatePosition = false;
+		Body &body = *context.GetBodyInterface().CreateSoftBody(settings);
+		context.GetBodyInterface().AddBody(body.GetID(), EActivation::Activate);
+		SoftBodyMotionProperties *properties = static_cast<SoftBodyMotionProperties *>(body.GetMotionProperties());
+		properties->GetVertex(1).mPosition += Vec3(0.25f, 0, 0);
+		context.SimulateSingleStep();
+		const SoftBodyVertex &vertex = properties->GetVertex(1);
+		CHECK(vertex.mConstraintDelta.LengthSq() > 0.0f);
+		CHECK_APPROX_EQUAL(vertex.mVelocity, vertex.mConstraintDelta / context.GetStepDeltaTime(), 1.0e-4f);
+	}
+
+	TEST_CASE("TestConstraintDeltaVelocityAccumulatesSkinClamp")
+	{
+		PhysicsTestContext context;
+		context.ZeroGravity();
+		Ref<SoftBodySharedSettings> shared_settings = new SoftBodySharedSettings;
+		shared_settings->mVertices.push_back(SoftBodySharedSettings::Vertex(Float3(0, 0, 0), Float3(0, 0, 0), 0.0f));
+		shared_settings->mVertices.push_back(SoftBodySharedSettings::Vertex(Float3(1, 0, 0)));
+		shared_settings->mVertices.push_back(SoftBodySharedSettings::Vertex(Float3(0, 1, 0), Float3(0, 0, 0), 0.0f));
+		shared_settings->AddFace(SoftBodySharedSettings::Face(0, 1, 2));
+		shared_settings->mInvBindMatrices.push_back(SoftBodySharedSettings::InvBind(0, Mat44::sIdentity()));
+		SoftBodySharedSettings::Skinned skinned(1, 0.1f, FLT_MAX, 0.0f);
+		skinned.mWeights[0] = SoftBodySharedSettings::SkinWeight(0, 1.0f);
+		shared_settings->mSkinnedConstraints.push_back(skinned);
+		shared_settings->Optimize();
+		SoftBodyCreationSettings settings(shared_settings, RVec3::sZero(), Quat::sIdentity(), Layers::MOVING);
+		settings.mVelocityReconstruction = ESoftBodyVelocityReconstruction::ConstraintDelta;
+		settings.mNumIterations = 1;
+		settings.mLinearDamping = 0.0f;
+		settings.mAllowSleeping = false;
+		settings.mUpdatePosition = false;
+		Body &body = *context.GetBodyInterface().CreateSoftBody(settings);
+		context.GetBodyInterface().AddBody(body.GetID(), EActivation::Activate);
+		SoftBodyMotionProperties *properties = static_cast<SoftBodyMotionProperties *>(body.GetMotionProperties());
+		const Mat44 joint = Mat44::sIdentity();
+		properties->SkinVertices(body.GetCenterOfMassTransform(), &joint, 1, true, *context.GetTempAllocator());
+		properties->SkinVertices(body.GetCenterOfMassTransform(), &joint, 1, false, *context.GetTempAllocator());
+		properties->GetVertex(1).mPosition = Vec3(1.25f, 0, 0);
+		context.SimulateSingleStep();
+		const SoftBodyVertex &vertex = properties->GetVertex(1);
+		CHECK_APPROX_EQUAL(vertex.mPosition.GetX(), 1.1f, 1.0e-6f);
+		CHECK_APPROX_EQUAL(vertex.mVelocity, vertex.mConstraintDelta / context.GetStepDeltaTime(), 1.0e-4f);
+	}
+
+	TEST_CASE("TestConstraintDeltaVelocityMixedConstraintsLongRun")
+	{
+		PhysicsTestContext context(1.0f / 60.0f, 2, 2);
+		context.ZeroGravity();
+		Ref<SoftBodySharedSettings> shared_settings = SoftBodySharedSettings::sCreateCube(2, 1.0f);
+		shared_settings->mVertices[0].mInvMass = 0.0f;
+		for (SoftBodySharedSettings::Edge &edge : shared_settings->mEdgeConstraints)
+			edge.mCompliance = 1.0e-5f;
+		for (SoftBodySharedSettings::Volume &volume : shared_settings->mVolumeConstraints)
+			volume.mCompliance = 1.0e-5f;
+		shared_settings->mDihedralBendConstraints.push_back(SoftBodySharedSettings::DihedralBend(0, 3, 2, 1, 1.0e-4f));
+		shared_settings->CalculateBendConstraintConstants();
+		shared_settings->mLRAConstraints.push_back(SoftBodySharedSettings::LRA(0, 6, 1.5f));
+		shared_settings->mRodStretchShearConstraints.push_back(SoftBodySharedSettings::RodStretchShear(4, 5, 1.0e-5f));
+		shared_settings->CalculateRodProperties();
+		shared_settings->mInvBindMatrices.push_back(SoftBodySharedSettings::InvBind(0, Mat44::sIdentity()));
+		SoftBodySharedSettings::Skinned skinned(7, 0.08f, FLT_MAX, 0.0f);
+		skinned.mWeights[0] = SoftBodySharedSettings::SkinWeight(0, 1.0f);
+		shared_settings->mSkinnedConstraints.push_back(skinned);
+		shared_settings->Optimize();
+
+		SoftBodyCreationSettings settings(shared_settings, RVec3::sZero(), Quat::sIdentity(), Layers::MOVING);
+		settings.mVelocityReconstruction = ESoftBodyVelocityReconstruction::ConstraintDelta;
+		settings.mNumIterations = 8;
+		settings.mLinearDamping = 2.4f;
+		settings.mAllowSleeping = false;
+		settings.mUpdatePosition = false;
+		Body &body = *context.GetBodyInterface().CreateSoftBody(settings);
+		context.GetBodyInterface().AddBody(body.GetID(), EActivation::Activate);
+		SoftBodyMotionProperties *properties = static_cast<SoftBodyMotionProperties *>(body.GetMotionProperties());
+		Mat44 joint = Mat44::sIdentity();
+		properties->SkinVertices(body.GetCenterOfMassTransform(), &joint, 1, true, *context.GetTempAllocator());
+		properties->GetVertex(6).mPosition += Vec3(0, 0.3f, 0.3f);
+		properties->GetVertex(7).mPosition += Vec3(0.2f, 0, 0);
+		for (uint frame = 0; frame < 600; ++frame)
+		{
+			// The moving skin target performs external work, so this test checks bounded physical state, not an energy ceiling.
+			joint = Mat44::sTranslation(Vec3(0.05f * Sin(0.03f * frame), 0, 0));
+			properties->SkinVertices(body.GetCenterOfMassTransform(), &joint, 1, false, *context.GetTempAllocator());
+			context.SimulateSingleStep();
+			for (uint vertex_index = 0; vertex_index < shared_settings->mVertices.size(); ++vertex_index)
+			{
+				const SoftBodyVertex &vertex = properties->GetVertex(vertex_index);
+				CHECK(vertex.mPosition.LengthSq() < 100.0f);
+				CHECK(vertex.mVelocity.LengthSq() < 1.0e8f);
+			}
+		}
+	}
+
 	TEST_CASE("TestBendConstraint")
 	{
 		// Possible values for x3

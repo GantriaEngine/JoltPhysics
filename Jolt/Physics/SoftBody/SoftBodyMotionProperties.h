@@ -10,6 +10,7 @@
 #include <Jolt/Physics/Body/MotionProperties.h>
 #include <Jolt/Physics/Collision/TransformedShape.h>
 #include <Jolt/Physics/SoftBody/SoftBodySharedSettings.h>
+#include <Jolt/Physics/SoftBody/SoftBodyCreationSettings.h>
 #include <Jolt/Physics/SoftBody/SoftBodyVertex.h>
 #include <Jolt/Physics/SoftBody/SoftBodyUpdateContext.h>
 
@@ -77,6 +78,9 @@ public:
 	/// Get the number of solver iterations
 	uint32								GetNumIterations() const					{ return mNumIterations; }
 	void								SetNumIterations(uint32 inNumIterations)	{ mNumIterations = inNumIterations; }
+
+	/// Get the velocity reconstruction method selected at creation.
+	ESoftBodyVelocityReconstruction GetVelocityReconstruction() const { return mVelocityReconstruction; }
 
 	/// Get the pressure of the soft body
 	float								GetPressure() const							{ return mPressure; }
@@ -334,6 +338,7 @@ private:
 	AABox								mLocalBounds;								///< Bounding box of all vertices
 	AABox								mLocalPredictedBounds;						///< Predicted bounding box for all vertices using extrapolation of velocity by last step delta time
 	uint32								mNumIterations;								///< Number of solver iterations
+	ESoftBodyVelocityReconstruction mVelocityReconstruction = ESoftBodyVelocityReconstruction::PositionDifference;
 	uint								mNumSensors;								///< Workaround for TSAN false positive: store mCollidingSensors.size() in a separate variable.
 	float								mPressure;									///< n * R * T, amount of substance * ideal gas constant * absolute temperature, see https://en.wikipedia.org/wiki/Pressure
 	float								mSkinnedMaxDistanceMultiplier = 1.0f;		///< Multiplier applied to Skinned::mMaxDistance to allow tightening or loosening of the skin constraints

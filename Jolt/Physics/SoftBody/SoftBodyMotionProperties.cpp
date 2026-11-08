@@ -61,6 +61,7 @@ void SoftBodyMotionProperties::Initialize(const SoftBodyCreationSettings &inSett
 	// Store settings
 	mSettings = inSettings.mSettings;
 	mNumIterations = inSettings.mNumIterations;
+	mVelocityReconstruction = inSettings.mVelocityReconstruction;
 	mPressure = inSettings.mPressure;
 	mUpdatePosition = inSettings.mUpdatePosition;
 	mFacesDoubleSided = inSettings.mFacesDoubleSided;
@@ -75,6 +76,8 @@ void SoftBodyMotionProperties::Initialize(const SoftBodyCreationSettings &inSett
 		Vertex &out_vertex = mVertices[v];
 		out_vertex.mPreviousPosition = out_vertex.mPosition = rotation * Vec3(in_vertex.mPosition);
 		out_vertex.mVelocity = rotation.Multiply3x3(Vec3(in_vertex.mVelocity));
+		out_vertex.mIntegratedVelocity = Vec3::sZero();
+		out_vertex.mConstraintDelta = Vec3::sZero();
 		out_vertex.ResetCollision();
 		out_vertex.mInvMass = in_vertex.mInvMass;
 		mLocalBounds.Encapsulate(out_vertex.mPosition);
@@ -344,6 +347,11 @@ void SoftBodyMotionProperties::IntegratePositions(const SoftBodyUpdateContext &i
 		}
 
 		// Integrate
+		if (mVelocityReconstruction == ESoftBodyVelocityReconstruction::ConstraintDelta)
+		{
+			v.mIntegratedVelocity = v.mVelocity;
+			v.mConstraintDelta = Vec3::sZero();
+		}
 		Vec3 position = v.mPosition;
 		v.mPreviousPosition = position;
 		v.mPosition = position + v.mVelocity * dt;
@@ -452,6 +460,13 @@ void SoftBodyMotionProperties::ApplyDihedralBendConstraints(const SoftBodyUpdate
 		v1.mPosition = x1 - minus_lambda * w1 * d1c;
 		v2.mPosition = x2 - minus_lambda * w2 * d2c;
 		v3.mPosition = x3 - minus_lambda * w3 * d3c;
+		if (mVelocityReconstruction == ESoftBodyVelocityReconstruction::ConstraintDelta)
+		{
+			v0.mConstraintDelta -= minus_lambda * w0 * d0c;
+			v1.mConstraintDelta -= minus_lambda * w1 * d1c;
+			v2.mConstraintDelta -= minus_lambda * w2 * d2c;
+			v3.mConstraintDelta -= minus_lambda * w3 * d3c;
+		}
 	}
 }
 
@@ -503,6 +518,13 @@ void SoftBodyMotionProperties::ApplyVolumeConstraints(const SoftBodyUpdateContex
 		v2.mPosition = x2 - minus_lambda * w2 * d2c;
 		v3.mPosition = x3 - minus_lambda * w3 * d3c;
 		v4.mPosition = x4 - minus_lambda * w4 * d4c;
+		if (mVelocityReconstruction == ESoftBodyVelocityReconstruction::ConstraintDelta)
+		{
+			v1.mConstraintDelta -= minus_lambda * w1 * d1c;
+			v2.mConstraintDelta -= minus_lambda * w2 * d2c;
+			v3.mConstraintDelta -= minus_lambda * w3 * d3c;
+			v4.mConstraintDelta -= minus_lambda * w4 * d4c;
+		}
 	}
 }
 
@@ -546,6 +568,10 @@ void SoftBodyMotionProperties::ApplySkinConstraints(const SoftBodyUpdateContext 
 				{
 					// Push the vertex to the surface of the back stop sphere
 					float delta_len = Sqrt(delta_len_sq);
+					if (mVelocityReconstruction == ESoftBodyVelocityReconstruction::ConstraintDelta)
+						vertex.mConstraintDelta += delta_len > 0.0f?
+							delta * (s->mBackStopRadius / delta_len - 1.0f)
+							: skin_state.mNormal * s->mBackStopRadius;
 					vertex.mPosition = delta_len > 0.0f?
 						center + delta * (s->mBackStopRadius / delta_len)
 						: center + skin_state.mNormal * s->mBackStopRadius;
@@ -559,12 +585,19 @@ void SoftBodyMotionProperties::ApplySkinConstraints(const SoftBodyUpdateContext 
 				float delta_len_sq = delta.LengthSq();
 				float max_distance_sq = Square(max_distance);
 				if (delta_len_sq > max_distance_sq)
-					vertex.mPosition = skin_pos + delta * Sqrt(max_distance_sq / delta_len_sq);
+				{
+					float scale = Sqrt(max_distance_sq / delta_len_sq);
+					if (mVelocityReconstruction == ESoftBodyVelocityReconstruction::ConstraintDelta)
+						vertex.mConstraintDelta += delta * (scale - 1.0f);
+					vertex.mPosition = skin_pos + delta * scale;
+				}
 			}
 		}
 		else
 		{
 			// Kinematic: Just update the vertex position
+			if (mVelocityReconstruction == ESoftBodyVelocityReconstruction::ConstraintDelta)
+				vertex.mConstraintDelta += skin_pos - vertex.mPosition;
 			vertex.mPosition = skin_pos;
 		}
 	}
@@ -597,6 +630,11 @@ void SoftBodyMotionProperties::ApplyEdgeConstraints(const SoftBodyUpdateContext 
 		Vec3 correction = delta * (length - e->mRestLength) / denom;
 		v0.mPosition = x0 + v0.mInvMass * correction;
 		v1.mPosition = x1 - v1.mInvMass * correction;
+		if (mVelocityReconstruction == ESoftBodyVelocityReconstruction::ConstraintDelta)
+		{
+			v0.mConstraintDelta += v0.mInvMass * correction;
+			v1.mConstraintDelta -= v1.mInvMass * correction;
+		}
 	}
 }
 
@@ -625,6 +663,11 @@ void SoftBodyMotionProperties::ApplyRodStretchShearConstraints(const SoftBodyUpd
 		Vec3 delta = (x1 - x0 - d3 * r->mLength) / denom;
 		v0.mPosition = x0 + v0.mInvMass * delta;
 		v1.mPosition = x1 - v1.mInvMass * delta;
+		if (mVelocityReconstruction == ESoftBodyVelocityReconstruction::ConstraintDelta)
+		{
+			v0.mConstraintDelta += v0.mInvMass * delta;
+			v1.mConstraintDelta -= v1.mInvMass * delta;
+		}
 		// q * e3_bar = q * (0, 0, -1, 0) = [-qy, qx, -qw, qz]
 		Quat q_e3_bar(rotation.GetXYZW().Swizzle<SWIZZLE_Y, SWIZZLE_X, SWIZZLE_W, SWIZZLE_Z>().FlipSign<-1, 1, -1, 1>());
 		rotation += (2.0f * r->mInvMass * r->mLength) * Quat::sMultiplyImaginary(delta, q_e3_bar);
@@ -693,7 +736,12 @@ void SoftBodyMotionProperties::ApplyLRAConstraints(uint inStartIndex, uint inEnd
 		Vec3 delta = vertex1.mPosition - x0;
 		float delta_len_sq = delta.LengthSq();
 		if (delta_len_sq > Square(lra->mMaxDistance))
-			vertex1.mPosition = x0 + delta * MulRSqrtApproximate(lra->mMaxDistance, delta_len_sq);
+		{
+			float scale = MulRSqrtApproximate(lra->mMaxDistance, delta_len_sq);
+			vertex1.mPosition = x0 + delta * scale;
+			if (mVelocityReconstruction == ESoftBodyVelocityReconstruction::ConstraintDelta)
+				vertex1.mConstraintDelta += delta * (scale - 1.0f);
+		}
 	}
 }
 
@@ -711,7 +759,10 @@ void SoftBodyMotionProperties::ApplyCollisionConstraintsAndUpdateVelocities(cons
 			Vec3 prev_v = v.mVelocity;
 
 			// XPBD velocity update
-			v.mVelocity = (v.mPosition - v.mPreviousPosition) / dt;
+			if (mVelocityReconstruction == ESoftBodyVelocityReconstruction::ConstraintDelta)
+				v.mVelocity = v.mIntegratedVelocity + v.mConstraintDelta / dt;
+			else
+				v.mVelocity = (v.mPosition - v.mPreviousPosition) / dt;
 
 			// Satisfy collision constraint
 			static_assert(int(BodyID::cBroadPhaseBit) < 0); // CCD contacts should be negative too (see: SoftBodyVertex::MarkCCDContact)
