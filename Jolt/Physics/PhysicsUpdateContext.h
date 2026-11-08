@@ -157,6 +157,7 @@ public:
 	JobSystem::Barrier *	mBarrier;												///< Barrier used to wait for all physics jobs to complete
 
 	float					mStepDeltaTime;											///< Delta time for a simulation step (collision step)
+	float					mUpdateDeltaTime;										///< Delta time for the full PhysicsSystem::Update call
 	float					mWarmStartImpulseRatio;									///< Ratio of this step delta time vs last step
 	atomic<uint32>			mErrors { 0 };											///< Errors that occurred during the update, actual type is EPhysicsUpdateError
 

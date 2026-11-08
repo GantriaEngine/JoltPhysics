@@ -101,6 +101,10 @@ struct PhysicsSettings
 	/// the object is allowed to go to sleep. Must be a positive number. (unit: m/s)
 	float		mPointVelocitySleepThreshold = 0.03f;
 
+	/// Use the full PhysicsSystem::Update delta time for the sleep test, which runs only on the last collision step.
+	/// When false, preserve the original behavior of accumulating one collision step per update.
+	bool		mUseFullUpdateDeltaForSleep = false;
+
 	///@name These variables are mainly for debugging purposes, they allow turning on/off certain subsystems. You probably want to leave them alone.
 	///@{
 
