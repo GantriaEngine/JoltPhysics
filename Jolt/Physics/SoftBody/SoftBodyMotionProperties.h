@@ -77,6 +77,7 @@ public:
 	/// Get the number of solver iterations
 	uint32								GetNumIterations() const					{ return mNumIterations; }
 	void								SetNumIterations(uint32 inNumIterations)	{ mNumIterations = inNumIterations; }
+	uint32								GetNumConstraintIterations() const	{ return mNumConstraintIterations; }
 
 	/// Get the velocity reconstruction method selected at creation.
 	ESoftBodyVelocityReconstruction GetVelocityReconstruction() const { return mVelocityReconstruction; }
@@ -261,7 +262,7 @@ private:
 	void								ApplyPressure(const SoftBodyUpdateContext &inContext);
 
 	/// Integrate the positions of all vertices by 1 sub step
-	void								IntegratePositions(const SoftBodyUpdateContext &inContext);
+	void								IntegratePositions(SoftBodyUpdateContext &ioContext);
 
 	/// Enforce all bend constraints
 	void								ApplyDihedralBendConstraints(const SoftBodyUpdateContext &inContext, uint inStartIndex, uint inEndIndex);
@@ -292,7 +293,7 @@ private:
 	void								StartFirstIteration(SoftBodyUpdateContext &ioContext);
 
 	/// Executes tasks that need to run on the start of an iteration (i.e. the stuff that can't run in parallel)
-	void								StartNextIteration(const SoftBodyUpdateContext &ioContext);
+	void								StartNextIteration(SoftBodyUpdateContext &ioContext);
 
 	/// Helper function for ParallelUpdate that works on batches of collision planes
 	EStatus								ParallelDetermineCollisionPlanes(SoftBodyUpdateContext &ioContext);
@@ -319,6 +320,8 @@ private:
 
 	RefConst<SoftBodySharedSettings>	mSettings;									///< Configuration of the particles and constraints
 	Array<Vertex>						mVertices;									///< Current state of all vertices in the simulation
+	Array<float>						mEdgeLambdas;								///< Retained multipliers within one temporal integration, only allocated for opt-in sweeps
+	Array<float>							mVolumeLambdas;							///< Retained multipliers within one temporal integration, only allocated for opt-in sweeps
 	Array<RodState>						mRodStates;									///< Current state of all rods in the simulation
 	Array<CollidingShape>				mCollidingShapes;							///< List of colliding shapes retrieved during the last update
 	Array<CollidingSensor>				mCollidingSensors;							///< List of colliding sensors retrieved during the last update
@@ -326,6 +329,7 @@ private:
 	AABox								mLocalBounds;								///< Bounding box of all vertices
 	AABox								mLocalPredictedBounds;						///< Predicted bounding box for all vertices using extrapolation of velocity by last step delta time
 	uint32								mNumIterations;								///< Number of solver iterations
+	uint32								mNumConstraintIterations = 1;		///< Number of whole-graph constraint sweeps per solver iteration
 	ESoftBodyVelocityReconstruction mVelocityReconstruction = ESoftBodyVelocityReconstruction::PositionDifference;
 	uint								mNumSensors;								///< Workaround for TSAN false positive: store mCollidingSensors.size() in a separate variable.
 	float								mPressure;									///< n * R * T, amount of substance * ideal gas constant * absolute temperature, see https://en.wikipedia.org/wiki/Pressure

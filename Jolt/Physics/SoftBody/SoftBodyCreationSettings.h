@@ -53,6 +53,20 @@ public:
 	/// Restore a shape, all its children and materials. Pass in an empty map in ioSharedSettingsMap / ioMaterialMap / ioGroupFilterMap or reuse the same map while reading multiple shapes from the same stream in order to restore duplicates.
 	static SBCSResult	sRestoreWithChildren(StreamIn &inStream, IDToSharedSettingsMap &ioSharedSettingsMap, IDToMaterialMap &ioMaterialMap, IDToGroupFilterMap &ioGroupFilterMap);
 
+	/// Whether the optional repeated constraint sweep is supported by this constraint graph.
+	/// Check this before allocating a native body; the original single sweep accepts all upstream families.
+	bool				IsConstraintConvergenceSupported() const
+	{
+		if (mNumConstraintIterations == 1)
+			return true;
+		if ((mNumConstraintIterations != 2 && mNumConstraintIterations != 4 && mNumConstraintIterations != 8)
+			|| mNumIterations == 0 || mVelocityReconstruction != ESoftBodyVelocityReconstruction::ConstraintDelta || mSettings == nullptr)
+			return false;
+		return mSettings->mDihedralBendConstraints.empty() && mSettings->mSkinnedConstraints.empty()
+			&& mSettings->mLRAConstraints.empty() && mSettings->mRodStretchShearConstraints.empty()
+			&& mSettings->mRodBendTwistConstraints.empty();
+	}
+
 	RefConst<SoftBodySharedSettings> mSettings;				///< Defines the configuration of this soft body
 
 	RVec3				mPosition { RVec3::sZero() };		///< Initial position of the soft body
@@ -66,6 +80,7 @@ public:
 	CollisionGroup		mCollisionGroup;					///< The collision group this body belongs to (determines if two objects can collide)
 
 	uint32				mNumIterations = 5;					///< Number of solver iterations
+	uint32				mNumConstraintIterations = 1;			///< Whole-graph edge/volume sweeps per temporal solver iteration; supported opt-in values: 2, 4, 8
 	ESoftBodyVelocityReconstruction mVelocityReconstruction = ESoftBodyVelocityReconstruction::PositionDifference; ///< Defaults to original solver behavior
 	float				mLinearDamping = 0.1f;				///< Linear damping: dv/dt = -mLinearDamping * v. Value should be zero or positive and is usually close to 0.
 	float				mMaxLinearVelocity = 500.0f;		///< Maximum linear velocity that a vertex can reach (m/s)
