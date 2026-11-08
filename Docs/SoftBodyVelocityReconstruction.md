@@ -31,6 +31,10 @@ families have implementation coverage but have not received that same
 long-horizon physical qualification. The mode does not make exact constraints
 energetically stable in all configurations.
 
+Unit tests exercise the default mode, a float quantization case, edge and
+volume correction accumulation, dihedral bending, skin clamping, rod stretch,
+long-range attachment, and reconstruction of creation settings from a body.
+
 Contact position projection occurs after velocity reconstruction, as before,
 and deliberately does not enter the current sub step's accumulator. The
 subsequent contact impulse/friction/restitution velocity logic is unchanged.
