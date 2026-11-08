@@ -1,0 +1,48 @@
+name: Gantria physics patch qualification
+
+on:
+  push:
+    branches: [gantria/physics]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2025-vs2026
+            mode: Release
+          - os: ubuntu-24.04
+            mode: Release
+          - os: ubuntu-24.04
+            mode: Sanitizers
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
+      ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+      UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Enable MSVC
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $Installation = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          & "$Installation\Common7\Tools\Launch-VsDevShell.ps1" -Arch amd64 -HostArch amd64 -SkipAutomaticLocation
+          Get-ChildItem Env: | ForEach-Object { "$($_.Name)=$($_.Value)" >> $env:GITHUB_ENV }
+      - name: Build and run native patch regressions
+        run: python .github/gantria_qualify.py --mode ${{ matrix.mode }}
+      - name: Preserve successes and failures
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: gantria-jolt-${{ matrix.os }}-${{ matrix.mode }}
+          path: qualification-evidence/
+          if-no-files-found: error
