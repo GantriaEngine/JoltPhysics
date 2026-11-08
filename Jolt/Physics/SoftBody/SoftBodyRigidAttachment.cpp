@@ -125,6 +125,7 @@ void SoftBodyRigidAttachment::OnStep(const PhysicsStepListenerContext &inContext
 {
 	if (mStatus != EStatus::Active)
 		return;
+	mLastImpulseOnSoftBody = Vec3::sZero();
 	if (inContext.mIsFirstStep)
 		mStepsThisUpdate = 0;
 	if (++mStepsThisUpdate > mSettings.mMaxStepsPerUpdate
