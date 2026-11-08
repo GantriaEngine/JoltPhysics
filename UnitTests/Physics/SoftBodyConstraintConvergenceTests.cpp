@@ -108,6 +108,8 @@ TEST_SUITE("SoftBodyConstraintConvergenceTests")
 		context.ZeroGravity();
 		Ref<SoftBodySharedSettings> shared = new SoftBodySharedSettings;
 		shared->mVertices.push_back(SoftBodySharedSettings::Vertex(Float3(0, 0, 0), Float3(2, 0, 0)));
+		shared->mVertices.push_back(SoftBodySharedSettings::Vertex(Float3(0, 1, 0), Float3(2, 0, 0)));
+		shared->mVertices.push_back(SoftBodySharedSettings::Vertex(Float3(0, 0, 1), Float3(2, 0, 0)));
 		shared->Optimize();
 		Body &body = CreateSoft(context, shared, 8);
 		auto *motion = static_cast<SoftBodyMotionProperties *>(body.GetMotionProperties());
