@@ -105,6 +105,31 @@ TEST_SUITE("SoftBodyRigidAttachmentTests")
 		CHECK(final_energy < initial_energy);
 	}
 
+	TEST_CASE("TestSettledAttachmentSleepsAndSoftMotionWakesRigid")
+	{
+		PhysicsTestContext context(1.0f / 60.0f, 8);
+		context.ZeroGravity();
+		PhysicsSettings physics_settings = context.GetSystem()->GetPhysicsSettings();
+		physics_settings.mUseFullUpdateDeltaForSleep = true;
+		context.GetSystem()->SetPhysicsSettings(physics_settings);
+
+		Body &soft = CreateSoftTriangle(context);
+		Body &rigid = CreateRigidBox(context, RVec3(2, 0, 0));
+		SoftBodyRigidAttachment attachment;
+		CHECK(attachment.Connect(*context.GetSystem(), soft.GetID(), 1, rigid.GetID(), Vec3(-1, 0, 0), GetSettings()));
+		for (int frame = 0; frame < 36; ++frame)
+			CHECK(context.SimulateSingleStep() == EPhysicsUpdateError::None);
+		CHECK(attachment.GetStatus() == SoftBodyRigidAttachment::EStatus::Active);
+		CHECK(!rigid.IsActive());
+
+		SoftBodyVertex &vertex = static_cast<SoftBodyMotionProperties *>(soft.GetMotionProperties())->GetVertex(1);
+		vertex.mPosition += Vec3(0.25f, 0, 0);
+		CHECK(context.SimulateSingleStep() == EPhysicsUpdateError::None);
+		CHECK(rigid.IsActive());
+		CHECK(attachment.GetLastImpulseOnSoftBody().GetX() < 0.0f);
+		CHECK(rigid.GetLinearVelocity().GetX() > 0.0f);
+	}
+
 	TEST_CASE("TestOffCenterAnchorProducesOppositeTorque")
 	{
 		PhysicsTestContext context;
