@@ -92,12 +92,17 @@ TEST_SUITE("SoftBodyRigidAttachmentTests")
 		Body &soft = CreateSoftTriangle(context);
 		Body &rigid = CreateRigidBox(context, RVec3(2, 0, 0));
 		rigid.SetLinearVelocity(Vec3(2, 0, 0));
+		float initial_energy = 0.5f * 4.0f / rigid.GetMotionProperties()->GetInverseMass();
 		SoftBodyRigidAttachment attachment;
 		CHECK(attachment.Connect(*context.GetSystem(), soft.GetID(), 1, rigid.GetID(), Vec3(-1, 0, 0), GetSettings()));
 		context.SimulateSingleStep();
 		CHECK(attachment.GetLastImpulseOnSoftBody().GetX() > 0.0f);
 		CHECK(rigid.GetLinearVelocity().GetX() < 2.0f);
-		CHECK(static_cast<SoftBodyMotionProperties *>(soft.GetMotionProperties())->GetVertex(1).mVelocity.GetX() > 0.0f);
+		const SoftBodyVertex &vertex = static_cast<SoftBodyMotionProperties *>(soft.GetMotionProperties())->GetVertex(1);
+		CHECK(vertex.mVelocity.GetX() > 0.0f);
+		float final_energy = 0.5f * rigid.GetLinearVelocity().LengthSq() / rigid.GetMotionProperties()->GetInverseMass()
+			+ 0.5f * vertex.mVelocity.LengthSq() / vertex.mInvMass;
+		CHECK(final_energy < initial_energy);
 	}
 
 	TEST_CASE("TestOffCenterAnchorProducesOppositeTorque")
