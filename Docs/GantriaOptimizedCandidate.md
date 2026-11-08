@@ -1,0 +1,7 @@
+# Combined opt-in physics candidate
+
+This branch composes two independently tested experiments on the qualified v5.6.0 numerical foundation `109be79fa82be0b306c56e4b4357675ed7843767`. It starts at constraint-convergence head `25658bcf45f21bb2674d47952638c31c7d0b1467` and cherry-picks the four commits from dynamic-attachment head `cd095d408a1cd231ad43fa8725d06a818fd63b13`. The only cherry-pick conflict was the unit-test CMake list; the resolution registers both test files. The attachment implementation, header, tests, and documentation have identical file contents to the attachment branch. The convergence runtime files and tests have identical file contents to the convergence branch.
+
+The default remains the upstream single constraint sweep and position-difference velocity reconstruction. `ConstraintDelta` and two, four, or eight retained-lambda sweeps require explicit soft-body creation settings. The rigid-to-soft attachment requires an explicitly connected helper. No helper is registered automatically and no per-vertex external callback is added.
+
+Composition is a source checkpoint, not a qualification result. The combined library still requires its own Release and sanitizer unit tests, the full native and unified physical qualification, and provider integration tests. A candidate speedup requires quality gates and a same-build one-sweep control at the relevant cadence. Results from the separate source branches do not certify their combination.
