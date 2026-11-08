@@ -41,6 +41,8 @@ Body *BodyInterface::CreateBody(const BodyCreationSettings &inSettings)
 Body *BodyInterface::CreateSoftBody(const SoftBodyCreationSettings &inSettings)
 {
 	Body *body = mBodyManager->AllocateSoftBody(inSettings);
+	if (body == nullptr)
+		return nullptr;
 	if (!mBodyManager->AddBody(body))
 	{
 		mBodyManager->FreeBody(body);
@@ -63,6 +65,8 @@ Body *BodyInterface::CreateBodyWithID(const BodyID &inBodyID, const BodyCreation
 Body *BodyInterface::CreateSoftBodyWithID(const BodyID &inBodyID, const SoftBodyCreationSettings &inSettings)
 {
 	Body *body = mBodyManager->AllocateSoftBody(inSettings);
+	if (body == nullptr)
+		return nullptr;
 	if (!mBodyManager->AddBodyWithCustomID(body, inBodyID))
 	{
 		mBodyManager->FreeBody(body);

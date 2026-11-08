@@ -206,6 +206,9 @@ Body *BodyManager::AllocateBody(const BodyCreationSettings &inBodyCreationSettin
 /// Create a soft body using creation settings. The returned body will not be part of the body manager yet.
 Body *BodyManager::AllocateSoftBody(const SoftBodyCreationSettings &inSoftBodyCreationSettings) const
 {
+	if (!inSoftBodyCreationSettings.IsConstraintConvergenceSupported())
+		return nullptr;
+
 	// Fill in basic properties
 	SoftBodyWithMotionPropertiesAndShape *bmp = new SoftBodyWithMotionPropertiesAndShape;
 	SoftBodyMotionProperties *mp = &bmp->mMotionProperties;

@@ -51,6 +51,7 @@ public:
 	atomic<uint>						mNextSensorIndex { 0 };						///< Next sensor to process for DetermineCollisionPlanes
 	atomic<uint>						mNumSensorsProcessed { 0 };					///< Number of sensors processed by DetermineSensorCollisions, used to determine if we can go to the next step
 	atomic<uint>						mNextIteration { 0 };						///< Next simulation iteration to process
+	atomic<uint>						mConstraintSweep { 0 };					///< Whole-graph projection sweep within the current simulation iteration
 	atomic<uint>						mNextConstraintGroup { 0 };					///< Next constraint group to process
 	atomic<uint>						mNumConstraintGroupsProcessed { 0 };		///< Number of groups processed, used to determine if we can go to the next iteration
 

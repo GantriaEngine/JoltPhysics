@@ -19,6 +19,7 @@ JPH_IMPLEMENT_SERIALIZABLE_NON_VIRTUAL(SoftBodyCreationSettings)
 	JPH_ADD_ENUM_ATTRIBUTE(SoftBodyCreationSettings, mObjectLayer)
 	JPH_ADD_ATTRIBUTE(SoftBodyCreationSettings, mCollisionGroup)
 	JPH_ADD_ATTRIBUTE(SoftBodyCreationSettings, mNumIterations)
+	JPH_ADD_ATTRIBUTE(SoftBodyCreationSettings, mNumConstraintIterations)
 	JPH_ADD_ENUM_ATTRIBUTE(SoftBodyCreationSettings, mVelocityReconstruction)
 	JPH_ADD_ATTRIBUTE(SoftBodyCreationSettings, mLinearDamping)
 	JPH_ADD_ATTRIBUTE(SoftBodyCreationSettings, mMaxLinearVelocity)
@@ -41,6 +42,7 @@ void SoftBodyCreationSettings::SaveBinaryState(StreamOut &inStream) const
 	inStream.Write(mObjectLayer);
 	mCollisionGroup.SaveBinaryState(inStream);
 	inStream.Write(mNumIterations);
+	inStream.Write(mNumConstraintIterations);
 	inStream.Write(mVelocityReconstruction);
 	inStream.Write(mLinearDamping);
 	inStream.Write(mMaxLinearVelocity);
@@ -63,6 +65,7 @@ void SoftBodyCreationSettings::RestoreBinaryState(StreamIn &inStream)
 	inStream.Read(mObjectLayer);
 	mCollisionGroup.RestoreBinaryState(inStream);
 	inStream.Read(mNumIterations);
+	inStream.Read(mNumConstraintIterations);
 	inStream.Read(mVelocityReconstruction);
 	inStream.Read(mLinearDamping);
 	inStream.Read(mMaxLinearVelocity);

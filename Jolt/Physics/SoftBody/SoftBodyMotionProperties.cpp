@@ -61,7 +61,13 @@ void SoftBodyMotionProperties::Initialize(const SoftBodyCreationSettings &inSett
 	// Store settings
 	mSettings = inSettings.mSettings;
 	mNumIterations = inSettings.mNumIterations;
+	mNumConstraintIterations = inSettings.mNumConstraintIterations;
 	mVelocityReconstruction = inSettings.mVelocityReconstruction;
+	if (mNumConstraintIterations > 1)
+	{
+		mEdgeLambdas.resize(mSettings->mEdgeConstraints.size(), 0.0f);
+		mVolumeLambdas.resize(mSettings->mVolumeConstraints.size(), 0.0f);
+	}
 	mPressure = inSettings.mPressure;
 	mUpdatePosition = inSettings.mUpdatePosition;
 	mFacesDoubleSided = inSettings.mFacesDoubleSided;
@@ -325,9 +331,15 @@ void SoftBodyMotionProperties::ApplyPressure(const SoftBodyUpdateContext &inCont
 	}
 }
 
-void SoftBodyMotionProperties::IntegratePositions(const SoftBodyUpdateContext &inContext)
+void SoftBodyMotionProperties::IntegratePositions(SoftBodyUpdateContext &inContext)
 {
 	JPH_PROFILE_FUNCTION();
+	if (mNumConstraintIterations > 1)
+	{
+		std::fill(mEdgeLambdas.begin(), mEdgeLambdas.end(), 0.0f);
+		std::fill(mVolumeLambdas.begin(), mVolumeLambdas.end(), 0.0f);
+		inContext.mConstraintSweep.store(0, memory_order_relaxed);
+	}
 
 	float dt = inContext.mSubStepDeltaTime;
 	float linear_damping = max(0.0f, 1.0f - GetLinearDamping() * dt); // See: MotionProperties::ApplyForceTorqueAndDragInternal
@@ -512,6 +524,18 @@ void SoftBodyMotionProperties::ApplyVolumeConstraints(const SoftBodyUpdateContex
 		if (denom < 1.0e-12f)
 			continue;
 		float minus_lambda = c / denom;
+		if (mNumConstraintIterations > 1)
+		{
+			float &lambda = mVolumeLambdas[v - mSettings->mVolumeConstraints.data()];
+			if (inContext.mConstraintSweep.load(memory_order_relaxed) == 0)
+				lambda = -minus_lambda;
+			else
+			{
+				float delta_lambda = -(c + v->mCompliance * inv_dt_sq * lambda) / denom;
+				lambda += delta_lambda;
+				minus_lambda = -delta_lambda;
+			}
+		}
 
 		// Apply correction
 		v1.mPosition = x1 - minus_lambda * w1 * d1c;
@@ -627,7 +651,27 @@ void SoftBodyMotionProperties::ApplyEdgeConstraints(const SoftBodyUpdateContext 
 		float denom = length * (v0.mInvMass + v1.mInvMass + e->mCompliance * inv_dt_sq);
 		if (denom < 1.0e-12f)
 			continue;
-		Vec3 correction = delta * (length - e->mRestLength) / denom;
+		Vec3 correction;
+		if (mNumConstraintIterations == 1)
+			correction = delta * (length - e->mRestLength) / denom;
+		else
+		{
+			float &lambda = mEdgeLambdas[e - mSettings->mEdgeConstraints.data()];
+			if (inContext.mConstraintSweep.load(memory_order_relaxed) == 0)
+			{
+				correction = delta * (length - e->mRestLength) / denom;
+				lambda = -(length - e->mRestLength) /
+					(v0.mInvMass + v1.mInvMass + e->mCompliance * inv_dt_sq);
+			}
+			else
+			{
+				float alpha = e->mCompliance * inv_dt_sq;
+				float delta_lambda = -(length - e->mRestLength + alpha * lambda) /
+					(v0.mInvMass + v1.mInvMass + alpha);
+				lambda += delta_lambda;
+				correction = delta * (-delta_lambda / length);
+			}
+		}
 		v0.mPosition = x0 + v0.mInvMass * correction;
 		v1.mPosition = x1 - v1.mInvMass * correction;
 		if (mVelocityReconstruction == ESoftBodyVelocityReconstruction::ConstraintDelta)
@@ -1010,7 +1054,7 @@ void SoftBodyMotionProperties::InitializeUpdateContext(float inDeltaTime, Body &
 	ioContext.mDisplacementDueToGravity = (0.5f * mNumIterations * (mNumIterations + 1) * Square(ioContext.mSubStepDeltaTime)) * ioContext.mGravity;
 }
 
-void SoftBodyMotionProperties::StartNextIteration(const SoftBodyUpdateContext &ioContext)
+void SoftBodyMotionProperties::StartNextIteration(SoftBodyUpdateContext &ioContext)
 {
 	ApplyPressure(ioContext);
 
@@ -1136,6 +1180,15 @@ SoftBodyMotionProperties::EStatus SoftBodyMotionProperties::ParallelApplyConstra
 
 				// Process non-parallel group
 				ProcessGroup(ioContext, num_groups);
+
+				if (mNumConstraintIterations > 1 && ioContext.mConstraintSweep.load(memory_order_relaxed) + 1 < mNumConstraintIterations)
+				{
+					// Every group has completed. Repeat the ordered constraint graph without another integration.
+					ioContext.mConstraintSweep.fetch_add(1, memory_order_release);
+					ioContext.mNumConstraintGroupsProcessed.store(0, memory_order_release);
+					ioContext.mNextConstraintGroup.store(0, memory_order_release);
+					return EStatus::DidWork;
+				}
 
 				ApplyCollisionConstraintsAndUpdateVelocities(ioContext);
 
