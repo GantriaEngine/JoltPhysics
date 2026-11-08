@@ -217,6 +217,7 @@ TEST_SUITE("SoftBodyTests")
 		context.GetBodyInterface().AddBody(body.GetID(), EActivation::Activate);
 		SoftBodyMotionProperties *properties = static_cast<SoftBodyMotionProperties *>(body.GetMotionProperties());
 		const Mat44 joint = Mat44::sIdentity();
+		properties->SkinVertices(body.GetCenterOfMassTransform(), &joint, 1, true, *context.GetTempAllocator());
 		properties->SkinVertices(body.GetCenterOfMassTransform(), &joint, 1, false, *context.GetTempAllocator());
 		properties->GetVertex(1).mPosition = Vec3(1.25f, 0, 0);
 		context.SimulateSingleStep();
