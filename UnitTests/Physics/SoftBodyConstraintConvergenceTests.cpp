@@ -122,26 +122,26 @@ TEST_SUITE("SoftBodyConstraintConvergenceTests")
 	TEST_CASE("TestVolumeAndEdgeGraphUsesAdditionalSweeps")
 	{
 		PhysicsTestContext one;
-		PhysicsTestContext four;
+		PhysicsTestContext two;
 		one.ZeroGravity();
-		four.ZeroGravity();
+		two.ZeroGravity();
 		Ref<SoftBodySharedSettings> shared = SoftBodySharedSettings::sCreateCube(2, 1.0f);
 		Body &one_body = CreateSoft(one, shared, 1);
-		Body &four_body = CreateSoft(four, shared, 4);
+		Body &two_body = CreateSoft(two, shared, 2);
 		auto *one_motion = static_cast<SoftBodyMotionProperties *>(one_body.GetMotionProperties());
-		auto *four_motion = static_cast<SoftBodyMotionProperties *>(four_body.GetMotionProperties());
+		auto *two_motion = static_cast<SoftBodyMotionProperties *>(two_body.GetMotionProperties());
 		one_motion->GetVertex(0).mPosition += Vec3(0.25f, 0.1f, 0);
-		four_motion->GetVertex(0).mPosition += Vec3(0.25f, 0.1f, 0);
+		two_motion->GetVertex(0).mPosition += Vec3(0.25f, 0.1f, 0);
 		one.SimulateSingleStep();
-		four.SimulateSingleStep();
+		two.SimulateSingleStep();
 		bool different = false;
 		for (uint i = 0; i < shared->mVertices.size(); ++i)
 		{
 			const auto &a = one_motion->GetVertex(i);
-			const auto &b = four_motion->GetVertex(i);
+			const auto &b = two_motion->GetVertex(i);
 			different |= (a.mPosition - b.mPosition).LengthSq() > 1.0e-10f;
 			CHECK(!b.mVelocity.IsNaN());
-			CHECK_APPROX_EQUAL(b.mVelocity, b.mIntegratedVelocity + b.mConstraintDelta / four.GetStepDeltaTime(), 1.0e-4f);
+			CHECK_APPROX_EQUAL(b.mVelocity, b.mIntegratedVelocity + b.mConstraintDelta / two.GetStepDeltaTime(), 1.0e-4f);
 		}
 		CHECK(different);
 	}
