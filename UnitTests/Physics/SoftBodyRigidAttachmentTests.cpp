@@ -181,6 +181,24 @@ TEST_SUITE("SoftBodyRigidAttachmentTests")
 		SoftBodyRigidAttachment::Settings settings = GetSettings();
 		settings.mStiffness = 1.0f;
 		CHECK(!attachment.Connect(*context.GetSystem(), soft.GetID(), 1, rigid.GetID(), Vec3::sZero(), settings));
+		Body &static_rigid = context.CreateBox(RVec3(3, 0, 0), Quat::sIdentity(), EMotionType::Static,
+			EMotionQuality::Discrete, Layers::NON_MOVING, Vec3::sReplicate(0.1f));
+		CHECK(!attachment.Connect(*context.GetSystem(), soft.GetID(), 1, static_rigid.GetID(), Vec3::sZero(), GetSettings()));
 		CHECK(attachment.GetStatus() == SoftBodyRigidAttachment::EStatus::Disconnected);
+	}
+
+	TEST_CASE("TestOverlappingHelpersRejectedUntilDisconnect")
+	{
+		PhysicsTestContext context;
+		context.ZeroGravity();
+		Body &soft = CreateSoftTriangle(context);
+		Body &rigid = CreateRigidBox(context, RVec3(2, 0, 0));
+		SoftBodyRigidAttachment first;
+		SoftBodyRigidAttachment second;
+		CHECK(first.Connect(*context.GetSystem(), soft.GetID(), 1, rigid.GetID(), Vec3::sZero(), GetSettings()));
+		CHECK(!second.Connect(*context.GetSystem(), soft.GetID(), 1, rigid.GetID(), Vec3::sZero(), GetSettings()));
+		CHECK(second.GetStatus() == SoftBodyRigidAttachment::EStatus::Disconnected);
+		first.Disconnect();
+		CHECK(second.Connect(*context.GetSystem(), soft.GetID(), 1, rigid.GetID(), Vec3::sZero(), GetSettings()));
 	}
 }

@@ -39,6 +39,9 @@ public:
 		InvalidState
 	};
 
+							SoftBodyRigidAttachment() = default;
+							SoftBodyRigidAttachment(const SoftBodyRigidAttachment &) = delete;
+	SoftBodyRigidAttachment &operator = (const SoftBodyRigidAttachment &) = delete;
 							~SoftBodyRigidAttachment() override;
 
 	/// inRigidLocalPoint is relative to the rigid center of mass. Both IDs include their generation.

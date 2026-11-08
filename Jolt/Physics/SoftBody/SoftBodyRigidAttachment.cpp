@@ -9,9 +9,24 @@
 #include <Jolt/Physics/Body/BodyInterface.h>
 #include <Jolt/Physics/Body/BodyLock.h>
 #include <Jolt/Physics/PhysicsSystem.h>
+#include <Jolt/Core/Mutex.h>
 #include <cmath>
 
 JPH_NAMESPACE_BEGIN
+
+namespace
+{
+	struct AttachmentClaim
+	{
+		PhysicsSystem *mSystem;
+		BodyID mSoftBodyID;
+		BodyID mRigidBodyID;
+	};
+
+	Mutex sAttachmentClaimsMutex;
+	AttachmentClaim sAttachmentClaims[1024];
+	uint32 sAttachmentClaimCount = 0;
+}
 
 SoftBodyRigidAttachment::~SoftBodyRigidAttachment()
 {
@@ -27,10 +42,10 @@ bool SoftBodyRigidAttachment::Connect(PhysicsSystem &inSystem, BodyID inSoftBody
 	if (inSoftBodyID == inRigidBodyID
 		|| !std::isfinite(inSettings.mStiffness) || inSettings.mStiffness <= 0.0f || inSettings.mStiffness > 0.5f
 		|| !std::isfinite(inSettings.mVelocityDamping) || inSettings.mVelocityDamping < 0.0f || inSettings.mVelocityDamping > 1.0f
-		|| !std::isfinite(inSettings.mCompliance) || inSettings.mCompliance < 0.0f
-		|| !std::isfinite(inSettings.mMaxImpulse) || inSettings.mMaxImpulse <= 0.0f
-		|| !std::isfinite(inSettings.mBreakDistance) || inSettings.mBreakDistance <= 0.0f
-		|| !std::isfinite(inSettings.mMaxDeltaTime) || inSettings.mMaxDeltaTime <= 0.0f
+		|| !std::isfinite(inSettings.mCompliance) || inSettings.mCompliance < 0.0f || inSettings.mCompliance > 1000.0f
+		|| !std::isfinite(inSettings.mMaxImpulse) || inSettings.mMaxImpulse <= 0.0f || inSettings.mMaxImpulse > 1000.0f
+		|| !std::isfinite(inSettings.mBreakDistance) || inSettings.mBreakDistance <= 0.0f || inSettings.mBreakDistance > 10000.0f
+		|| !std::isfinite(inSettings.mMaxDeltaTime) || inSettings.mMaxDeltaTime <= 0.0f || inSettings.mMaxDeltaTime > 1.0f / 30.0f
 		|| inSettings.mMaxStepsPerUpdate == 0 || inSettings.mMaxStepsPerUpdate > 16
 		|| !std::isfinite(inRigidLocalPoint.GetX()) || !std::isfinite(inRigidLocalPoint.GetY()) || !std::isfinite(inRigidLocalPoint.GetZ()))
 		return false;
@@ -52,8 +67,23 @@ bool SoftBodyRigidAttachment::Connect(PhysicsSystem &inSystem, BodyID inSoftBody
 		if (!rigid_lock.SucceededAndIsInBroadPhase())
 			return false;
 		const Body &rigid_body = rigid_lock.GetBody();
-		if (!rigid_body.IsRigidBody() || !rigid_body.IsDynamic())
+		if (!rigid_body.IsRigidBody() || !rigid_body.IsDynamic()
+			|| rigid_body.GetMotionProperties()->GetAllowedDOFs() != EAllowedDOFs::All)
 			return false;
+	}
+	{
+		lock_guard lock(sAttachmentClaimsMutex);
+		if (sAttachmentClaimCount >= 1024)
+			return false;
+		for (uint32 i = 0; i < sAttachmentClaimCount; ++i)
+		{
+			const AttachmentClaim &claim = sAttachmentClaims[i];
+			if (claim.mSystem == &inSystem
+				&& (claim.mSoftBodyID == inSoftBodyID || claim.mSoftBodyID == inRigidBodyID
+					|| claim.mRigidBodyID == inSoftBodyID || claim.mRigidBodyID == inRigidBodyID))
+				return false;
+		}
+		sAttachmentClaims[sAttachmentClaimCount++] = { &inSystem, inSoftBodyID, inRigidBodyID };
 	}
 
 	mSystem = &inSystem;
@@ -75,7 +105,17 @@ bool SoftBodyRigidAttachment::Connect(PhysicsSystem &inSystem, BodyID inSoftBody
 void SoftBodyRigidAttachment::Disconnect()
 {
 	if (mSystem != nullptr)
+	{
 		mSystem->RemoveStepListener(this);
+		lock_guard lock(sAttachmentClaimsMutex);
+		for (uint32 i = 0; i < sAttachmentClaimCount; ++i)
+			if (sAttachmentClaims[i].mSystem == mSystem && sAttachmentClaims[i].mSoftBodyID == mSoftBodyID
+				&& sAttachmentClaims[i].mRigidBodyID == mRigidBodyID)
+			{
+				sAttachmentClaims[i] = sAttachmentClaims[--sAttachmentClaimCount];
+				break;
+			}
+	}
 	mSystem = nullptr;
 	mStatus = EStatus::Disconnected;
 	mLastImpulseOnSoftBody = Vec3::sZero();
@@ -151,15 +191,44 @@ void SoftBodyRigidAttachment::OnStep(const PhysicsStepListenerContext &inContext
 		return;
 	}
 	float impulse_length_sq = impulse.LengthSq();
-	if (impulse_length_sq > Square(mSettings.mMaxImpulse))
-		impulse *= mSettings.mMaxImpulse / std::sqrt(impulse_length_sq);
-
-	Vec3 soft_velocity_delta = soft_body->GetRotation().Conjugated() * (vertex.mInvMass * impulse);
-	if (!std::isfinite(soft_velocity_delta.GetX()) || !std::isfinite(soft_velocity_delta.GetY()) || !std::isfinite(soft_velocity_delta.GetZ()))
+	if (!std::isfinite(impulse_length_sq))
 	{
 		mStatus = EStatus::InvalidState;
 		return;
 	}
+	if (impulse_length_sq > Square(mSettings.mMaxImpulse))
+		impulse *= mSettings.mMaxImpulse / std::sqrt(impulse_length_sq);
+
+	Vec3 soft_velocity_delta = soft_body->GetRotation().Conjugated() * (vertex.mInvMass * impulse);
+	Vec3 next_soft_velocity = vertex.mVelocity + soft_velocity_delta;
+	if (!std::isfinite(next_soft_velocity.GetX()) || !std::isfinite(next_soft_velocity.GetY()) || !std::isfinite(next_soft_velocity.GetZ()))
+	{
+		mStatus = EStatus::InvalidState;
+		return;
+	}
+	const MotionProperties *rigid_properties = rigid_body->GetMotionProperties();
+	Vec3 next_rigid_linear_velocity;
+	Vec3 next_rigid_angular_velocity;
+	bool within_velocity_limits = false;
+	for (uint attempt = 0; attempt < 16; ++attempt)
+	{
+		next_rigid_linear_velocity = rigid_body->GetLinearVelocity() - impulse * rigid_properties->GetInverseMass();
+		next_rigid_angular_velocity = rigid_body->GetAngularVelocity() - rigid_body->GetInverseInertia().Multiply3x3(lever_arm.Cross(impulse));
+		if (std::isfinite(next_rigid_linear_velocity.LengthSq()) && std::isfinite(next_rigid_angular_velocity.LengthSq())
+			&& next_rigid_linear_velocity.LengthSq() <= Square(rigid_properties->GetMaxLinearVelocity())
+			&& next_rigid_angular_velocity.LengthSq() <= Square(rigid_properties->GetMaxAngularVelocity()))
+		{
+			within_velocity_limits = true;
+			break;
+		}
+		impulse *= 0.5f;
+	}
+	if (!within_velocity_limits)
+	{
+		mStatus = EStatus::InvalidState;
+		return;
+	}
+	soft_velocity_delta = soft_body->GetRotation().Conjugated() * (vertex.mInvMass * impulse);
 	vertex.mVelocity += soft_velocity_delta;
 	inContext.mPhysicsSystem->GetBodyInterfaceNoLock().AddImpulse(mRigidBodyID, -impulse, rigid_point);
 	inContext.mPhysicsSystem->GetBodyInterfaceNoLock().ActivateBody(mSoftBodyID);
