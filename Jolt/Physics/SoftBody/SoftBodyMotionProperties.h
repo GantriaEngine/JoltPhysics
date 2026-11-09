@@ -295,6 +295,7 @@ private:
 	struct FaceContactStats
 	{
 		uint							Corrections = 0;
+		uint							CulledFaces = 0;
 		uint							SkippedUnsupportedShapes = 0;
 		Vec3							ContactImpulse = Vec3::sZero();
 		Vec3							MovableClothMomentumDelta = Vec3::sZero();
@@ -305,7 +306,7 @@ private:
 	};
 
 	/// Private sphere/triangle geometry diagnostic, with optional velocity impulse response
-	FaceContactStats					ProjectSphereFacePositions(const SoftBodyUpdateContext &inContext, bool inResolveVelocity);
+	FaceContactStats					ProjectSphereFacePositions(const SoftBodyUpdateContext &inContext, bool inResolveVelocity, bool inCullFaces);
 
 	/// Private normal-refresh experiment: recompute vertex planes after the structural solve
 	bool								RefreshCollisionPlanes();

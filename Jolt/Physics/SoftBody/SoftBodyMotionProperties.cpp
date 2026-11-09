@@ -14,6 +14,7 @@
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/Physics/Body/BodyManager.h>
 #include <Jolt/Core/ScopeExit.h>
+#include <algorithm>
 #include <climits>
 #include <cmath>
 #include <cstdio>
@@ -912,7 +913,7 @@ static Vec3 GetContactFaceWeights(Vec3Arg inPoint, Vec3Arg inA, Vec3Arg inB, Vec
 	return Vec3(1.0f - V - W, V, W);
 }
 
-SoftBodyMotionProperties::FaceContactStats SoftBodyMotionProperties::ProjectSphereFacePositions(const SoftBodyUpdateContext &inContext, bool inResolveVelocity)
+SoftBodyMotionProperties::FaceContactStats SoftBodyMotionProperties::ProjectSphereFacePositions(const SoftBodyUpdateContext &inContext, bool inResolveVelocity, bool inCullFaces)
 {
 	JPH_PROFILE_FUNCTION();
 	FaceContactStats Stats;
@@ -940,6 +941,38 @@ SoftBodyMotionProperties::FaceContactStats SoftBodyMotionProperties::ProjectSphe
 				Vertex &A = mVertices[Triangle.mVertex[0]];
 				Vertex &B = mVertices[Triangle.mVertex[1]];
 				Vertex &C = mVertices[Triangle.mVertex[2]];
+				if (inCullFaces)
+				{
+					// The triangle is contained by this AABB, so its closest
+					// distance cannot be smaller than the box distance. Do the
+					// comparison in double and expand the radius for float input
+					// rounding. Nonfinite inputs retain the unculled path.
+					const double CX = Center.GetX(), CY = Center.GetY(), CZ = Center.GetZ();
+					const double AX = A.mPosition.GetX(), AY = A.mPosition.GetY(), AZ = A.mPosition.GetZ();
+					const double BX = B.mPosition.GetX(), BY = B.mPosition.GetY(), BZ = B.mPosition.GetZ();
+					const double TX = C.mPosition.GetX(), TY = C.mPosition.GetY(), TZ = C.mPosition.GetZ();
+					if (std::isfinite(CX) && std::isfinite(CY) && std::isfinite(CZ) &&
+						std::isfinite(AX) && std::isfinite(AY) && std::isfinite(AZ) &&
+						std::isfinite(BX) && std::isfinite(BY) && std::isfinite(BZ) &&
+						std::isfinite(TX) && std::isfinite(TY) && std::isfinite(TZ) && std::isfinite(Radius))
+					{
+						const double MinX = std::min({AX, BX, TX}), MaxX = std::max({AX, BX, TX});
+						const double MinY = std::min({AY, BY, TY}), MaxY = std::max({AY, BY, TY});
+						const double MinZ = std::min({AZ, BZ, TZ}), MaxZ = std::max({AZ, BZ, TZ});
+						const double DX = std::max({MinX - CX, CX - MaxX, 0.0});
+						const double DY = std::max({MinY - CY, CY - MaxY, 0.0});
+						const double DZ = std::max({MinZ - CZ, CZ - MaxZ, 0.0});
+						const double Scale = std::max({1.0, std::fabs(CX), std::fabs(CY), std::fabs(CZ),
+							std::fabs(AX), std::fabs(AY), std::fabs(AZ), std::fabs(BX), std::fabs(BY), std::fabs(BZ),
+							std::fabs(TX), std::fabs(TY), std::fabs(TZ), double(Radius)});
+						const double ConservativeRadius = double(Radius) + 16.0 * FLT_EPSILON * Scale;
+						if (DX * DX + DY * DY + DZ * DZ > ConservativeRadius * ConservativeRadius)
+						{
+							++Stats.CulledFaces;
+							continue;
+						}
+					}
+				}
 				const Vec3 FaceNormal = (B.mPosition - A.mPosition).Cross(C.mPosition - A.mPosition);
 				const float FaceNormalLengthSq = FaceNormal.LengthSq();
 				if (FaceNormalLengthSq <= 1.0e-16f)
@@ -1545,6 +1578,8 @@ SoftBodyMotionProperties::EStatus SoftBodyMotionProperties::ParallelApplyConstra
 					&& StageFlag[0] == '1' && StageFlag[1] == '\0';
 				const char *FaceFlag = std::getenv("GANTRIA_CONTACT_FACE_DIAGNOSTIC");
 				const bool RecordFaces = (OrderH || OrderI) && FaceFlag != nullptr && FaceFlag[0] == '1' && FaceFlag[1] == '\0';
+				const char *FaceCullFlag = std::getenv("GANTRIA_CONTACT_FACE_AABB_CULL");
+				const bool CullFaces = FaceCullFlag != nullptr && FaceCullFlag[0] == '1' && FaceCullFlag[1] == '\0';
 				const uint64 StageIntegration = RecordStages || RecordFaces ? mContactStageIntegrationIndex++ : 0;
 				const uint32 StageBodyID = RecordStages || RecordFaces ? ioContext.mBody->GetID().GetIndexAndSequenceNumber() : 0;
 				const char *StageMode = OrderB ? "B" : OrderC ? "C" : OrderD ? "D" : OrderE ? "E" : OrderF ? "F" : OrderH ? "H" : OrderI ? "I" : "A";
@@ -1654,22 +1689,22 @@ SoftBodyMotionProperties::EStatus SoftBodyMotionProperties::ParallelApplyConstra
 				if (OrderH || OrderI)
 				{
 				Array<Vec3> BeforeFace = SavePositions();
-				const FaceContactStats FaceStats = ProjectSphereFacePositions(ioContext, OrderI);
+				const FaceContactStats FaceStats = ProjectSphereFacePositions(ioContext, OrderI, CullFaces);
 				LogStage("FaceContact", &BeforeFace);
 				if (RecordFaces)
 				{
 					if (OrderI)
-						std::fprintf(stdout, "[Physics:FaceContact] integration=%llu body=%u mode=I corrections=%u skipped_unsupported_shapes=%u max_penetration_m=%.9g contact_impulse_local_ns=%.9g,%.9g,%.9g movable_cloth_momentum_delta_local_ns=%.9g,%.9g,%.9g computed_pin_reaction_local_ns=%.9g,%.9g,%.9g computed_prescribed_reaction_local_ns=%.9g,%.9g,%.9g kinematic_velocity_work_j=%.9g cloth_velocity_kinetic_delta_j=%.9g\n",
+						std::fprintf(stdout, "[Physics:FaceContact] integration=%llu body=%u mode=I corrections=%u culled_faces=%u skipped_unsupported_shapes=%u max_penetration_m=%.9g contact_impulse_local_ns=%.9g,%.9g,%.9g movable_cloth_momentum_delta_local_ns=%.9g,%.9g,%.9g computed_pin_reaction_local_ns=%.9g,%.9g,%.9g computed_prescribed_reaction_local_ns=%.9g,%.9g,%.9g kinematic_velocity_work_j=%.9g cloth_velocity_kinetic_delta_j=%.9g\n",
 							static_cast<unsigned long long>(StageIntegration), StageBodyID,
-							FaceStats.Corrections, FaceStats.SkippedUnsupportedShapes, FaceStats.MaxPenetration,
+							FaceStats.Corrections, FaceStats.CulledFaces, FaceStats.SkippedUnsupportedShapes, FaceStats.MaxPenetration,
 							FaceStats.ContactImpulse.GetX(), FaceStats.ContactImpulse.GetY(), FaceStats.ContactImpulse.GetZ(),
 							FaceStats.MovableClothMomentumDelta.GetX(), FaceStats.MovableClothMomentumDelta.GetY(), FaceStats.MovableClothMomentumDelta.GetZ(),
 							FaceStats.ComputedPinReaction.GetX(), FaceStats.ComputedPinReaction.GetY(), FaceStats.ComputedPinReaction.GetZ(),
 							-FaceStats.ContactImpulse.GetX(), -FaceStats.ContactImpulse.GetY(), -FaceStats.ContactImpulse.GetZ(),
 							FaceStats.KinematicVelocityWork, FaceStats.ClothKineticDelta);
 					else
-						std::fprintf(stdout, "[Physics:FaceContact] integration=%llu body=%u mode=H corrections=%u max_penetration_m=%.9g velocity_response=INCOMPLETE rigid_reaction=INCOMPLETE\n",
-							static_cast<unsigned long long>(StageIntegration), StageBodyID, FaceStats.Corrections, FaceStats.MaxPenetration);
+						std::fprintf(stdout, "[Physics:FaceContact] integration=%llu body=%u mode=H corrections=%u culled_faces=%u max_penetration_m=%.9g velocity_response=INCOMPLETE rigid_reaction=INCOMPLETE\n",
+							static_cast<unsigned long long>(StageIntegration), StageBodyID, FaceStats.Corrections, FaceStats.CulledFaces, FaceStats.MaxPenetration);
 				}
 				}
 

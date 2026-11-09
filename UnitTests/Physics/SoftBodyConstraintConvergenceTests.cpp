@@ -125,6 +125,37 @@ TEST_SUITE("SoftBodyConstraintConvergenceTests")
 		std::string mPrevious;
 	};
 
+	struct ScopedFaceAabbCull
+	{
+		explicit ScopedFaceAabbCull(bool inEnabled)
+		{
+			const char *Previous = std::getenv("GANTRIA_CONTACT_FACE_AABB_CULL");
+			mHadPrevious = Previous != nullptr;
+			if (mHadPrevious)
+				mPrevious = Previous;
+			mSetSucceeded = Set(inEnabled ? "1" : nullptr);
+		}
+
+		~ScopedFaceAabbCull()
+		{
+			Set(mHadPrevious ? mPrevious.c_str() : nullptr);
+		}
+
+		static bool Set(const char *inValue)
+		{
+#ifdef _WIN32
+			return _putenv_s("GANTRIA_CONTACT_FACE_AABB_CULL", inValue != nullptr ? inValue : "") == 0;
+#else
+			return inValue != nullptr ? setenv("GANTRIA_CONTACT_FACE_AABB_CULL", inValue, 1) == 0
+				: unsetenv("GANTRIA_CONTACT_FACE_AABB_CULL") == 0;
+#endif
+		}
+
+		bool mSetSucceeded = false;
+		bool mHadPrevious = false;
+		std::string mPrevious;
+	};
+
 	static Body &CreateSoft(PhysicsTestContext &inContext, const SoftBodySharedSettings *inShared, uint32 inSweeps, uint32 InTemporalIterations = 1)
 	{
 		SoftBodyCreationSettings settings(inShared, RVec3::sZero(), Quat::sIdentity(), Layers::MOVING);
@@ -652,7 +683,8 @@ TEST_SUITE("SoftBodyConstraintConvergenceTests")
 
 	TEST_CASE("TestSphereFaceProbeDetectsInteriorContactWithoutVertexContact")
 	{
-		const auto Run = [](bool inFace, bool inSphere, const char *inOrder, bool inMoving = false, float inRestitution = 0.0f)
+		const auto Run = [](bool inFace, bool inSphere, const char *inOrder, bool inMoving = false,
+			float inRestitution = 0.0f, RVec3 inSphereCenter = RVec3(0.25, 0.25, 0.0), float inSphereRadius = 0.2f)
 		{
 			ScopedContactOrder Environment(inOrder);
 			CHECK(Environment.mSetSucceeded);
@@ -667,7 +699,7 @@ TEST_SUITE("SoftBodyConstraintConvergenceTests")
 			Context.ZeroGravity();
 			if (inSphere)
 			{
-				BodyCreationSettings SphereSettings(new SphereShape(0.2f), RVec3(0.25, 0.25, 0.0),
+				BodyCreationSettings SphereSettings(new SphereShape(inSphereRadius), inSphereCenter,
 					Quat::sIdentity(), EMotionType::Static, Layers::NON_MOVING);
 				SphereSettings.mRestitution = inRestitution;
 				Context.CreateBody(SphereSettings, EActivation::DontActivate);
@@ -732,5 +764,29 @@ TEST_SUITE("SoftBodyConstraintConvergenceTests")
 		const auto RestitutionUnsupported = Run(true, true, "I", true, 0.5f);
 		for (uint Index = 0; Index < 6; ++Index)
 			CHECK(RestitutionUnsupported[Index] == RestitutionOriginal[Index]);
+		for (const char *Order : { "H", "I" })
+			for (const RVec3 &Center : {
+				RVec3(0.25, 0.25, 0.0),       // face interior
+				RVec3(0.5, 0.0, 0.0),         // edge
+				RVec3(0.0, 0.0, 0.2500001),   // just outside expanded radius
+				RVec3(0.25, 0.25, 0.2499999), // just inside expanded radius
+				RVec3(0.5, -0.1, 0.0),        // edge contact from outside AABB
+				RVec3(1.6, 1.6, 0.0)         // finite far control
+			})
+			{
+				std::array<Vec3, 6> Unculled, Culled;
+				{
+					ScopedFaceAabbCull Cull(false);
+					CHECK(Cull.mSetSucceeded);
+					Unculled = Run(true, true, Order, true, 0.0f, Center);
+				}
+				{
+					ScopedFaceAabbCull Cull(true);
+					CHECK(Cull.mSetSucceeded);
+					Culled = Run(true, true, Order, true, 0.0f, Center);
+				}
+				for (uint Index = 0; Index < 6; ++Index)
+					CHECK(Culled[Index] == Unculled[Index]);
+			}
 	}
 }

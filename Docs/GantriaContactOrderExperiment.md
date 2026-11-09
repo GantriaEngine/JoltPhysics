@@ -83,6 +83,16 @@ restitution is zero. Other settings retain A's vertex response and are counted
 as skipped in the diagnostic row; the face path does not silently substitute
 physical masses or an inelastic response for the requested material behavior.
 
+`GANTRIA_CONTACT_FACE_AABB_CULL=1` optionally skips H/I triangle tests when
+the sphere center is farther than the contact radius from the triangle's
+axis-aligned bounding box. The comparison uses double arithmetic and expands
+the radius by 16 float input ulps at the current coordinate scale. Because a
+triangle lies within its box, a finite true contact cannot be excluded by this
+bound; nonfinite inputs take the unculled path. The switch defaults off so the
+previous H/I trajectory remains available for bit-exact qualification. The
+face diagnostic row counts skipped triangles. Profile timings with diagnostic
+logging are explanatory only; uninstrumented matched runs decide performance.
+
 `GANTRIA_CONTACT_STAGES=1` on a single 128×128 cloth logs
 `[Physics:ContactStage]` CSV rows at precontact, intermediate contact,
 poststructure, final contact, and refreshed-plane stages as applicable. Each
