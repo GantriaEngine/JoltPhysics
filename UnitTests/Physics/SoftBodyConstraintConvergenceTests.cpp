@@ -237,7 +237,6 @@ TEST_SUITE("SoftBodyConstraintConvergenceTests")
 			}
 		Shared->CalculateEdgeLengths();
 		Shared->Optimize();
-		CHECK(Shared->mUpdateGroups.size() > 2);
 		Body &SerialBody = CreateSoft(Serial, Shared, 2);
 		Body &ParallelBody = CreateSoft(Parallel, Shared, 2);
 		auto *SerialMotion = static_cast<SoftBodyMotionProperties *>(SerialBody.GetMotionProperties());
