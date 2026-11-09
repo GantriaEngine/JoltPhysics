@@ -13,6 +13,9 @@
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/Physics/Body/BodyManager.h>
 #include <Jolt/Core/ScopeExit.h>
+#include <climits>
+#include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #ifdef JPH_DEBUG_RENDERER
 	#include <Jolt/Renderer/DebugRenderer.h>
@@ -860,7 +863,63 @@ bool SoftBodyMotionProperties::ProjectCollisionPositionsWithLambda(Array<float> 
 	return Changed;
 }
 
-void SoftBodyMotionProperties::ApplyCollisionConstraintsAndUpdateVelocities(const SoftBodyUpdateContext &inContext)
+void SoftBodyMotionProperties::LogContactStage(uint64 inIntegration, uint32 inBodyID, const char *inMode, const char *inStage, const Array<Vec3> *inPreviousPositions) const
+{
+	float MaxTension = 0.0f, MaxCompression = 0.0f, MaxPlanePenetration = 0.0f;
+	uint TensionEdge = UINT_MAX, CompressionEdge = UINT_MAX, ActivePlanes = 0;
+	uint NonFinitePositions = 0, NonFiniteVelocities = 0;
+	double KineticEnergy = 0.0, SumPositionDelta = 0.0;
+	float MaxPositionDelta = 0.0f;
+	for (uint Index = 0; Index < mVertices.size(); ++Index)
+	{
+		const Vertex &V = mVertices[Index];
+		const bool PositionFinite = std::isfinite(V.mPosition.GetX()) && std::isfinite(V.mPosition.GetY()) && std::isfinite(V.mPosition.GetZ());
+		const bool VelocityFinite = std::isfinite(V.mVelocity.GetX()) && std::isfinite(V.mVelocity.GetY()) && std::isfinite(V.mVelocity.GetZ());
+		NonFinitePositions += !PositionFinite;
+		NonFiniteVelocities += !VelocityFinite;
+		if (PositionFinite && VelocityFinite && V.mInvMass > 0.0f)
+			KineticEnergy += 0.5 * double(V.mVelocity.LengthSq()) / double(V.mInvMass);
+		if (PositionFinite && inPreviousPositions != nullptr)
+		{
+			const float Delta = (V.mPosition - (*inPreviousPositions)[Index]).Length();
+			SumPositionDelta += Delta;
+			MaxPositionDelta = max(MaxPositionDelta, Delta);
+		}
+		if (PositionFinite && V.mInvMass > 0.0f && V.mCollidingShapeIndex >= 0)
+		{
+			++ActivePlanes;
+			MaxPlanePenetration = max(MaxPlanePenetration, -V.mCollisionPlane.SignedDistance(V.mPosition) + mVertexRadius);
+		}
+	}
+	for (uint Index = 0; Index < mSettings->mEdgeConstraints.size(); ++Index)
+	{
+		const Edge &E = mSettings->mEdgeConstraints[Index];
+		const uint32 A = E.mVertex[0], B = E.mVertex[1];
+		const uint32 Difference = A > B ? A - B : B - A;
+		if (!((Difference == 1 && A / 128 == B / 128) || Difference == 128) || E.mRestLength <= 0.0f)
+			continue; // 128x128 cloth axial edges only; callers gate this diagnostic to 16K vertices.
+		const float Strain = ((mVertices[B].mPosition - mVertices[A].mPosition).Length() - E.mRestLength) / E.mRestLength;
+		if (Strain > MaxTension)
+		{
+			MaxTension = Strain;
+			TensionEdge = Index;
+		}
+		if (Strain < MaxCompression)
+		{
+			MaxCompression = Strain;
+			CompressionEdge = Index;
+		}
+	}
+	if (inIntegration == 0 && inStage[0] == 'P')
+		std::fprintf(stdout, "[Physics:ContactStage] integration,body,mode,stage,max_tension,tension_edge,max_compression,compression_edge,max_plane_penetration,active_planes,nonfinite_positions,nonfinite_velocities,kinetic_j,sum_position_delta_m,max_position_delta_m\n");
+	std::fprintf(stdout, "[Physics:ContactStage] %llu,%u,%s,%s,%.9g,%u,%.9g,%u,%.9g,%u,%u,%u,%.9g,%.9g,%.9g\n",
+		static_cast<unsigned long long>(inIntegration), inBodyID,
+		inMode, inStage, MaxTension, TensionEdge, MaxCompression, CompressionEdge,
+		MaxPlanePenetration, ActivePlanes, NonFinitePositions, NonFiniteVelocities,
+		KineticEnergy, SumPositionDelta, MaxPositionDelta);
+}
+
+void SoftBodyMotionProperties::ApplyCollisionConstraintsAndUpdateVelocities(const SoftBodyUpdateContext &inContext, Vec3 *outClothVelocityImpulse, Vec3 *outDynamicRigidVelocityImpulse, double *outClothKineticDelta)
 {
 	JPH_PROFILE_FUNCTION();
 
@@ -887,6 +946,7 @@ void SoftBodyMotionProperties::ApplyCollisionConstraintsAndUpdateVelocities(cons
 				float projected_distance = -v.mCollisionPlane.SignedDistance(v.mPosition) + vertex_radius;
 				if (projected_distance > 0.0f)
 				{
+					const Vec3 VelocityBeforeContact = v.mVelocity;
 					// Remember that there was a collision
 					v.mHasContact = true;
 
@@ -956,6 +1016,8 @@ void SoftBodyMotionProperties::ApplyCollisionConstraintsAndUpdateVelocities(cons
 							// Apply impulse to rigid body
 							cs.mLinearVelocity += p * cs.mInvMass;
 							cs.mAngularVelocity += cs.mInvInertia * r2.Cross(p);
+							if (outDynamicRigidVelocityImpulse != nullptr)
+								*outDynamicRigidVelocityImpulse += inContext.mCenterOfMassTransform.Multiply3x3(p);
 
 							// Mark that the velocities of the body we hit need to be updated
 							cs.mUpdateVelocities = true;
@@ -980,6 +1042,10 @@ void SoftBodyMotionProperties::ApplyCollisionConstraintsAndUpdateVelocities(cons
 						if (prev_v_normal < restitution_threshold)
 							v.mVelocity -= cs.mRestitution * prev_v_normal * contact_normal;
 					}
+					if (outClothVelocityImpulse != nullptr)
+						*outClothVelocityImpulse += inContext.mCenterOfMassTransform.Multiply3x3((v.mVelocity - VelocityBeforeContact) / v.mInvMass);
+					if (outClothKineticDelta != nullptr)
+						*outClothKineticDelta += 0.5 * double(v.mVelocity.LengthSq() - VelocityBeforeContact.LengthSq()) / double(v.mInvMass);
 				}
 			}
 		}
@@ -1265,6 +1331,29 @@ SoftBodyMotionProperties::EStatus SoftBodyMotionProperties::ParallelApplyConstra
 				const bool OrderB = ContactOrder != nullptr && ContactOrder[0] == 'B' && ContactOrder[1] == '\0';
 				const bool OrderC = ContactOrder != nullptr && ContactOrder[0] == 'C' && ContactOrder[1] == '\0';
 				const bool OrderD = ContactOrder != nullptr && ContactOrder[0] == 'D' && ContactOrder[1] == '\0';
+				const char *StageFlag = std::getenv("GANTRIA_CONTACT_STAGES");
+				const bool RecordStages = mVertices.size() == 16384 && StageFlag != nullptr
+					&& StageFlag[0] == '1' && StageFlag[1] == '\0';
+				const uint64 StageIntegration = RecordStages ? mContactStageIntegrationIndex++ : 0;
+				const uint32 StageBodyID = RecordStages ? ioContext.mBody->GetID().GetIndexAndSequenceNumber() : 0;
+				const char *StageMode = OrderB ? "B" : OrderC ? "C" : OrderD ? "D" : "A";
+				auto SavePositions = [this, RecordStages]()
+				{
+					Array<Vec3> Positions;
+					if (RecordStages)
+					{
+						Positions.reserve(mVertices.size());
+						for (const Vertex &V : mVertices)
+							Positions.push_back(V.mPosition);
+					}
+					return Positions;
+				};
+				auto LogStage = [this, RecordStages, StageIntegration, StageBodyID, StageMode](const char *Name, const Array<Vec3> *Previous)
+				{
+					if (RecordStages)
+						LogContactStage(StageIntegration, StageBodyID, StageMode, Name, Previous);
+				};
+				LogStage("PreContact", nullptr);
 				uint ContactPasses = OrderD ? 4 : 1;
 				if (OrderC || OrderD)
 				{
@@ -1287,10 +1376,15 @@ SoftBodyMotionProperties::EStatus SoftBodyMotionProperties::ParallelApplyConstra
 					// structural pass. Retained Q2 multipliers continue from sweep 2.
 					for (uint Pass = 0; Pass < ContactPasses; ++Pass)
 					{
-						if (!ProjectCollisionPositionsOnly())
+						Array<Vec3> BeforeContact = SavePositions();
+						const bool Projected = ProjectCollisionPositionsOnly();
+						LogStage("IntermediateContact", &BeforeContact);
+						if (!Projected)
 							break;
+						Array<Vec3> BeforeStructure = SavePositions();
 						for (uint Group = 0; Group < mSettings->mUpdateGroups.size(); ++Group)
 							ProcessGroup(ioContext, Group);
+						LogStage("PostStructure", &BeforeStructure);
 					}
 				}
 				if (OrderD)
@@ -1300,20 +1394,46 @@ SoftBodyMotionProperties::EStatus SoftBodyMotionProperties::ParallelApplyConstra
 					Array<float> ContactLambdas(mVertices.size(), 0.0f);
 					for (uint Pass = 0; Pass < ContactPasses; ++Pass)
 					{
-						if (!ProjectCollisionPositionsWithLambda(ContactLambdas))
+						Array<Vec3> BeforeContact = SavePositions();
+						const bool Projected = ProjectCollisionPositionsWithLambda(ContactLambdas);
+						LogStage("MultiplierContact", &BeforeContact);
+						if (!Projected)
 							break;
+						Array<Vec3> BeforeStructure = SavePositions();
 						for (uint Group = 0; Group < mSettings->mUpdateGroups.size(); ++Group)
 							ProcessGroup(ioContext, Group);
+						LogStage("PostStructure", &BeforeStructure);
 					}
 				}
-				ApplyCollisionConstraintsAndUpdateVelocities(ioContext);
+				Array<Vec3> BeforeFinalContact = SavePositions();
+				Vec3 ClothVelocityImpulse = Vec3::sZero(), DynamicRigidVelocityImpulse = Vec3::sZero();
+				double ClothKineticDelta = 0.0;
+				ApplyCollisionConstraintsAndUpdateVelocities(ioContext,
+					RecordStages ? &ClothVelocityImpulse : nullptr,
+					RecordStages ? &DynamicRigidVelocityImpulse : nullptr,
+					RecordStages ? &ClothKineticDelta : nullptr);
+				LogStage("FinalContact", &BeforeFinalContact);
+				if (RecordStages)
+				{
+					if (StageIntegration == 0)
+						std::fprintf(stdout, "[Physics:ContactVelocityImpulse] integration,body,mode,cloth_impulse_x_ns,cloth_impulse_y_ns,cloth_impulse_z_ns,dynamic_rigid_impulse_x_ns,dynamic_rigid_impulse_y_ns,dynamic_rigid_impulse_z_ns,cloth_kinetic_delta_j\n");
+					std::fprintf(stdout, "[Physics:ContactVelocityImpulse] %llu,%u,%s,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g\n",
+						static_cast<unsigned long long>(StageIntegration), StageBodyID, StageMode,
+						ClothVelocityImpulse.GetX(), ClothVelocityImpulse.GetY(), ClothVelocityImpulse.GetZ(),
+						DynamicRigidVelocityImpulse.GetX(), DynamicRigidVelocityImpulse.GetY(), DynamicRigidVelocityImpulse.GetZ(),
+						ClothKineticDelta);
+				}
 
 				// Private contact-order experiment B: relax the structure after the
 				// existing contact solve. Velocity was reconstructed above, so this
 				// mode is a diagnostic of ordering, not an accepted physical update.
 				if (OrderB && ContactActive)
+				{
+					Array<Vec3> BeforeStructure = SavePositions();
 					for (uint Group = 0; Group < mSettings->mUpdateGroups.size(); ++Group)
 						ProcessGroup(ioContext, Group);
+					LogStage("PostStructure", &BeforeStructure);
+				}
 
 				uint iteration = ioContext.mNextIteration.fetch_add(1, memory_order_relaxed);
 				if (iteration < mNumIterations)

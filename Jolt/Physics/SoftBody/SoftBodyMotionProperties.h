@@ -284,13 +284,16 @@ private:
 	void								ApplyLRAConstraints(uint inStartIndex, uint inEndIndex);
 
 	/// Enforce all collision constraints & update all velocities according the XPBD algorithm
-	void								ApplyCollisionConstraintsAndUpdateVelocities(const SoftBodyUpdateContext &inContext);
+	void								ApplyCollisionConstraintsAndUpdateVelocities(const SoftBodyUpdateContext &inContext, Vec3 *outClothVelocityImpulse = nullptr, Vec3 *outDynamicRigidVelocityImpulse = nullptr, double *outClothKineticDelta = nullptr);
 
 	/// Private alternating-order experiment: position projection without velocity impulses
 	bool								ProjectCollisionPositionsOnly();
 
 	/// Private unilateral hard-contact XPBD multiplier experiment (static/kinematic only)
 	bool								ProjectCollisionPositionsWithLambda(Array<float> &ioLambdas);
+
+	/// Private contact-order stage metrics; values are diagnostics, not physical impulses or work
+	void								LogContactStage(uint64 inIntegration, uint32 inBodyID, const char *inMode, const char *inStage, const Array<Vec3> *inPreviousPositions) const;
 
 	/// Update the state of the soft body (position, velocity, bounds)
 	void								UpdateSoftBodyState(SoftBodyUpdateContext &ioContext, const PhysicsSettings &inPhysicsSettings);
@@ -336,6 +339,7 @@ private:
 	AABox								mLocalPredictedBounds;						///< Predicted bounding box for all vertices using extrapolation of velocity by last step delta time
 	uint32								mNumIterations;								///< Number of solver iterations
 	uint32								mNumConstraintIterations = 1;		///< Number of whole-graph constraint sweeps per solver iteration
+	uint64								mContactStageIntegrationIndex = 0; ///< Private diagnostic sequence, never read by the solver
 	ESoftBodyVelocityReconstruction mVelocityReconstruction = ESoftBodyVelocityReconstruction::PositionDifference;
 	uint								mNumSensors;								///< Workaround for TSAN false positive: store mCollidingSensors.size() in a separate variable.
 	float								mPressure;									///< n * R * T, amount of substance * ideal gas constant * absolute temperature, see https://en.wikipedia.org/wiki/Pressure
