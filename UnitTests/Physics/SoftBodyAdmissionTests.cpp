@@ -146,7 +146,9 @@ TEST_SUITE("SoftBodyAdmissionTests")
     {
         constexpr uint cResolution = 32;
         Ref<SoftBodySharedSettings> shared_settings = new SoftBodySharedSettings;
-        auto index = [](uint inX, uint inY) { return inY * cResolution + inX; };
+        const auto GetIndex = [cResolution](uint inX, uint inY) -> uint {
+            return inY * cResolution + inX;
+        };
         for (uint y = 0; y < cResolution; ++y)
             for (uint x = 0; x < cResolution; ++x)
             {
@@ -158,21 +160,21 @@ TEST_SUITE("SoftBodyAdmissionTests")
         for (uint y = 0; y < cResolution; ++y)
             for (uint x = 0; x < cResolution; ++x)
             {
-                uint a = index(x, y);
+                uint a = GetIndex(x, y);
                 if (x + 1 < cResolution)
                 {
-                    shared_settings->mEdgeConstraints.push_back(SoftBodySharedSettings::Edge(a, index(x + 1, y)));
+                    shared_settings->mEdgeConstraints.push_back(SoftBodySharedSettings::Edge{a, GetIndex(x + 1, y)});
                     if (x % 7 == 0) // Repeated endpoint contributes to the original connection weight.
-                        shared_settings->mEdgeConstraints.push_back(SoftBodySharedSettings::Edge(a, index(x + 1, y)));
+                        shared_settings->mEdgeConstraints.push_back(SoftBodySharedSettings::Edge{a, GetIndex(x + 1, y)});
                 }
                 if (y + 1 < cResolution)
-                    shared_settings->mEdgeConstraints.push_back(SoftBodySharedSettings::Edge(a, index(x, y + 1)));
+                    shared_settings->mEdgeConstraints.push_back(SoftBodySharedSettings::Edge{a, GetIndex(x, y + 1)});
                 if (x + 1 < cResolution && y + 1 < cResolution)
                 {
-                    shared_settings->mEdgeConstraints.push_back(SoftBodySharedSettings::Edge(a, index(x + 1, y + 1)));
-                    shared_settings->mEdgeConstraints.push_back(SoftBodySharedSettings::Edge(index(x + 1, y), index(x, y + 1)));
-                    shared_settings->AddFace(SoftBodySharedSettings::Face(a, index(x, y + 1), index(x + 1, y + 1)));
-                    shared_settings->AddFace(SoftBodySharedSettings::Face(a, index(x + 1, y + 1), index(x + 1, y)));
+                    shared_settings->mEdgeConstraints.push_back(SoftBodySharedSettings::Edge{a, GetIndex(x + 1, y + 1)});
+                    shared_settings->mEdgeConstraints.push_back(SoftBodySharedSettings::Edge{GetIndex(x + 1, y), GetIndex(x, y + 1)});
+                    shared_settings->AddFace(SoftBodySharedSettings::Face{a, GetIndex(x, y + 1), GetIndex(x + 1, y + 1)});
+                    shared_settings->AddFace(SoftBodySharedSettings::Face{a, GetIndex(x + 1, y + 1), GetIndex(x + 1, y)});
                 }
             }
         shared_settings->CalculateEdgeLengths();
