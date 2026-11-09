@@ -342,7 +342,9 @@ TEST_SUITE("SoftBodyConstraintConvergenceTests")
 			for (uint OldIndex = 0; OldIndex < Results.mEdgeRemap.size(); ++OldIndex)
 			{
 				const uint NewIndex = Results.mEdgeRemap[OldIndex];
-				REQUIRE(NewIndex < Seen.size());
+				CHECK(NewIndex < Seen.size());
+				if (NewIndex >= Seen.size())
+					continue;
 				CHECK(Seen[NewIndex] == 0);
 				Seen[NewIndex] = 1;
 				const auto &OldEdge = Source->mEdgeConstraints[OldIndex];
