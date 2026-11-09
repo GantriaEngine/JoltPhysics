@@ -14,6 +14,15 @@ authored material, and Engine public API are separate from this source.
 | `E` | Refresh vertex contact planes from post-structure positions before A's final contact update. Existing colliding shape transforms remain fixed for that soft update. Any CCD marker leaves the old plane path intact. No out-of-plane tie-break is imposed. |
 | `F` | D's unilateral contact/structure alternations, followed by a final multiplier projection. The one final velocity update treats retained normal support as active contact and uses its equivalent normal correction distance for the existing friction cap. `GANTRIA_CONTACT_PASSES=1..4` allows F1/F4 controls. Dynamic contacts retain A. |
 
+`GANTRIA_CONTACT_KINEMATIC_RELATIVE=1` is a separate G velocity-response
+switch, combinable with A or F. On kinematic contacts only, it calculates
+friction, normal response, and restitution from cloth velocity relative to the
+body's linear and angular point velocity, then applies the resulting velocity
+change to the cloth. Static contacts retain the original arithmetic and dynamic
+contacts retain their original coupled impulse path. Without the switch, the
+qualified default response remains unchanged. The switch does not change
+position projection or infer motion from teleported poses.
+
 C and D continue the retained structural multipliers after Q2, without another
 temporal integration. Their extra passes stop when the preceding contact phase
 made no position or multiplier change. No-contact negative controls therefore
@@ -44,7 +53,10 @@ velocity kinetic energy, and position displacement since the previous stage.
 The separate `[Physics:ContactVelocityImpulse]` row reports the summed
 velocity-domain change in cloth particle momentum, summed dynamic-rigid
 solver impulse, and cloth kinetic-energy delta during the final contact
-velocity step. Position projection displacement is **not** an impulse.
+velocity step. The kinematic column records the directly calculated dot product
+of cloth velocity impulse and prescribed surface velocity, for either G setting.
+It is only velocity-domain actuator work; position projection displacement is
+**not** an impulse.
 Linearized plane penetration is **not** sphere/triangle penetration. Stored
 precontact velocity has not yet been reconstructed for that integration.
 Static-pose actuator work and full energy closure are unavailable from these

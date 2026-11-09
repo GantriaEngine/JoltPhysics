@@ -229,6 +229,13 @@ void SoftBodyMotionProperties::DetermineCollidingShapes(const SoftBodyUpdateCont
 							cs.mOriginalLinearVelocity = cs.mLinearVelocity = mInverseTransform.Multiply3x3(mp->GetLinearVelocity());
 							cs.mOriginalAngularVelocity = cs.mAngularVelocity = mInverseTransform.Multiply3x3(mp->GetAngularVelocity());
 						}
+						else if (cs.mMotionType == EMotionType::Kinematic)
+						{
+							// Used only by the opt-in relative-velocity contact response.
+							const MotionProperties *mp = body.GetMotionProperties();
+							cs.mLinearVelocity = mInverseTransform.Multiply3x3(mp->GetLinearVelocity());
+							cs.mAngularVelocity = mInverseTransform.Multiply3x3(mp->GetAngularVelocity());
+						}
 						mHits.push_back(cs);
 					}
 				}
@@ -935,7 +942,7 @@ void SoftBodyMotionProperties::LogContactStage(uint64 inIntegration, uint32 inBo
 		KineticEnergy, SumPositionDelta, MaxPositionDelta);
 }
 
-void SoftBodyMotionProperties::ApplyCollisionConstraintsAndUpdateVelocities(const SoftBodyUpdateContext &inContext, Vec3 *outClothVelocityImpulse, Vec3 *outDynamicRigidVelocityImpulse, double *outClothKineticDelta, const Array<float> *inContactLambdas)
+void SoftBodyMotionProperties::ApplyCollisionConstraintsAndUpdateVelocities(const SoftBodyUpdateContext &inContext, Vec3 *outClothVelocityImpulse, Vec3 *outDynamicRigidVelocityImpulse, double *outClothKineticDelta, const Array<float> *inContactLambdas, bool inKinematicRelativeVelocity, double *outKinematicVelocityWork)
 {
 	JPH_PROFILE_FUNCTION();
 
@@ -1044,7 +1051,24 @@ void SoftBodyMotionProperties::ApplyCollisionConstraintsAndUpdateVelocities(cons
 							cs.mUpdateVelocities = true;
 						}
 					}
-					else if (cs.mSoftBodyInvMassScale > 0.0f)
+						else if (cs.mMotionType == EMotionType::Kinematic && inKinematicRelativeVelocity && cs.mSoftBodyInvMassScale > 0.0f)
+						{
+							// Resolve the cloth velocity relative to the prescribed surface
+							// velocity. A kinematic body receives no reciprocal impulse.
+							Vec3 R2 = v.mPosition - cs.mCenterOfMassTransform.GetTranslation();
+							Vec3 SurfaceVelocity = cs.GetPointVelocity(R2);
+							Vec3 RelativeVelocity = v.mVelocity - SurfaceVelocity;
+							Vec3 NormalVelocity = contact_normal * contact_normal.Dot(RelativeVelocity);
+							Vec3 TangentialVelocity = RelativeVelocity - NormalVelocity;
+							float TangentialSpeed = TangentialVelocity.Length();
+							if (TangentialSpeed > 0.0f)
+								v.mVelocity -= TangentialVelocity * min(cs.mFriction * max(projected_distance, retained_contact_distance) / (TangentialSpeed * dt), 1.0f);
+							v.mVelocity -= NormalVelocity;
+							float PreviousNormalSpeed = (prev_v - SurfaceVelocity).Dot(contact_normal);
+							if (PreviousNormalSpeed < restitution_threshold)
+								v.mVelocity -= cs.mRestitution * PreviousNormalSpeed * contact_normal;
+						}
+						else if (cs.mSoftBodyInvMassScale > 0.0f)
 					{
 						// Body is not movable, equations are simpler
 
@@ -1062,6 +1086,15 @@ void SoftBodyMotionProperties::ApplyCollisionConstraintsAndUpdateVelocities(cons
 						float prev_v_normal = prev_v.Dot(contact_normal);
 						if (prev_v_normal < restitution_threshold)
 							v.mVelocity -= cs.mRestitution * prev_v_normal * contact_normal;
+					}
+					if (outKinematicVelocityWork != nullptr && cs.mMotionType == EMotionType::Kinematic)
+					{
+						// J on cloth dotted with the actual surface velocity.
+						// This covers velocity response only; positional correction
+						// and externally imposed pose jumps are not included.
+						Vec3 R2 = v.mPosition - cs.mCenterOfMassTransform.GetTranslation();
+						Vec3 ClothImpulse = (v.mVelocity - VelocityBeforeContact) / v.mInvMass;
+						*outKinematicVelocityWork += double(ClothImpulse.Dot(cs.GetPointVelocity(R2)));
 					}
 					if (outClothVelocityImpulse != nullptr)
 						*outClothVelocityImpulse += inContext.mCenterOfMassTransform.Multiply3x3((v.mVelocity - VelocityBeforeContact) / v.mInvMass);
@@ -1354,6 +1387,9 @@ SoftBodyMotionProperties::EStatus SoftBodyMotionProperties::ParallelApplyConstra
 				const bool OrderD = ContactOrder != nullptr && ContactOrder[0] == 'D' && ContactOrder[1] == '\0';
 				const bool OrderE = ContactOrder != nullptr && ContactOrder[0] == 'E' && ContactOrder[1] == '\0';
 				const bool OrderF = ContactOrder != nullptr && ContactOrder[0] == 'F' && ContactOrder[1] == '\0';
+				const char *KinematicFlag = std::getenv("GANTRIA_CONTACT_KINEMATIC_RELATIVE");
+				const bool KinematicRelativeVelocity = KinematicFlag != nullptr
+					&& KinematicFlag[0] == '1' && KinematicFlag[1] == '\0';
 				const char *StageFlag = std::getenv("GANTRIA_CONTACT_STAGES");
 				const bool RecordStages = mVertices.size() == 16384 && StageFlag != nullptr
 					&& StageFlag[0] == '1' && StageFlag[1] == '\0';
@@ -1443,21 +1479,25 @@ SoftBodyMotionProperties::EStatus SoftBodyMotionProperties::ParallelApplyConstra
 				Array<Vec3> BeforeFinalContact = SavePositions();
 				Vec3 ClothVelocityImpulse = Vec3::sZero(), DynamicRigidVelocityImpulse = Vec3::sZero();
 				double ClothKineticDelta = 0.0;
+				double KinematicVelocityWork = 0.0;
 				ApplyCollisionConstraintsAndUpdateVelocities(ioContext,
 					RecordStages ? &ClothVelocityImpulse : nullptr,
 					RecordStages ? &DynamicRigidVelocityImpulse : nullptr,
 					RecordStages ? &ClothKineticDelta : nullptr,
-					OrderF ? &ContactLambdas : nullptr);
+					OrderF ? &ContactLambdas : nullptr,
+					KinematicRelativeVelocity,
+					RecordStages ? &KinematicVelocityWork : nullptr);
 				LogStage("FinalContact", &BeforeFinalContact);
 				if (RecordStages)
 				{
 					if (StageIntegration == 0)
-						std::fprintf(stdout, "[Physics:ContactVelocityImpulse] integration,body,mode,cloth_velocity_delta_momentum_x_ns,cloth_velocity_delta_momentum_y_ns,cloth_velocity_delta_momentum_z_ns,dynamic_rigid_solver_impulse_x_ns,dynamic_rigid_solver_impulse_y_ns,dynamic_rigid_solver_impulse_z_ns,cloth_velocity_kinetic_delta_j\n");
-					std::fprintf(stdout, "[Physics:ContactVelocityImpulse] %llu,%u,%s,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g\n",
+						std::fprintf(stdout, "[Physics:ContactVelocityImpulse] integration,body,mode,kinematic_relative,cloth_velocity_delta_momentum_x_ns,cloth_velocity_delta_momentum_y_ns,cloth_velocity_delta_momentum_z_ns,dynamic_rigid_solver_impulse_x_ns,dynamic_rigid_solver_impulse_y_ns,dynamic_rigid_solver_impulse_z_ns,cloth_velocity_kinetic_delta_j,kinematic_velocity_impulse_dot_surface_velocity_j\n");
+					std::fprintf(stdout, "[Physics:ContactVelocityImpulse] %llu,%u,%s,%u,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g\n",
 						static_cast<unsigned long long>(StageIntegration), StageBodyID, StageMode,
+						KinematicRelativeVelocity ? 1u : 0u,
 						ClothVelocityImpulse.GetX(), ClothVelocityImpulse.GetY(), ClothVelocityImpulse.GetZ(),
 						DynamicRigidVelocityImpulse.GetX(), DynamicRigidVelocityImpulse.GetY(), DynamicRigidVelocityImpulse.GetZ(),
-						ClothKineticDelta);
+						ClothKineticDelta, KinematicVelocityWork);
 				}
 
 				// Private contact-order experiment B: relax the structure after the

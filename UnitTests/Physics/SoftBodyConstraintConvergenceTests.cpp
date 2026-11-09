@@ -93,6 +93,37 @@ TEST_SUITE("SoftBodyConstraintConvergenceTests")
 		std::string mPrevious;
 	};
 
+	struct ScopedKinematicRelativeContact
+	{
+		explicit ScopedKinematicRelativeContact(bool inEnabled)
+		{
+			const char *Previous = std::getenv("GANTRIA_CONTACT_KINEMATIC_RELATIVE");
+			mHadPrevious = Previous != nullptr;
+			if (mHadPrevious)
+				mPrevious = Previous;
+			mSetSucceeded = Set(inEnabled ? "1" : nullptr);
+		}
+
+		~ScopedKinematicRelativeContact()
+		{
+			Set(mHadPrevious ? mPrevious.c_str() : nullptr);
+		}
+
+		static bool Set(const char *inValue)
+		{
+#ifdef _WIN32
+			return _putenv_s("GANTRIA_CONTACT_KINEMATIC_RELATIVE", inValue != nullptr ? inValue : "") == 0;
+#else
+			return inValue != nullptr ? setenv("GANTRIA_CONTACT_KINEMATIC_RELATIVE", inValue, 1) == 0
+				: unsetenv("GANTRIA_CONTACT_KINEMATIC_RELATIVE") == 0;
+#endif
+		}
+
+		bool mSetSucceeded = false;
+		bool mHadPrevious = false;
+		std::string mPrevious;
+	};
+
 	static Body &CreateSoft(PhysicsTestContext &inContext, const SoftBodySharedSettings *inShared, uint32 inSweeps, uint32 InTemporalIterations = 1)
 	{
 		SoftBodyCreationSettings settings(inShared, RVec3::sZero(), Quat::sIdentity(), Layers::MOVING);
@@ -559,5 +590,45 @@ TEST_SUITE("SoftBodyConstraintConvergenceTests")
 			}
 			CHECK(Motion->GetVertex(5).mPosition.GetX() < 2.0f);
 		}
+	}
+
+	TEST_CASE("TestKinematicContactUsesPrescribedSurfaceVelocityOnlyWhenEnabled")
+	{
+		Ref<SoftBodySharedSettings> Shared = new SoftBodySharedSettings;
+		Shared->mVertices.emplace_back(Float3(0.0f, 0.0f, 0.0f));
+		Shared->Optimize();
+		Vec3 StaticOff, StaticOn, KinematicOff, KinematicOn;
+		for (EMotionType MotionType : { EMotionType::Static, EMotionType::Kinematic })
+			for (bool Relative : { false, true })
+			{
+				ScopedKinematicRelativeContact Environment(Relative);
+				CHECK(Environment.mSetSucceeded);
+				PhysicsTestContext Context;
+				Context.ZeroGravity();
+				BodyCreationSettings SphereSettings(new SphereShape(0.75f), RVec3(0.6, 0, 0), Quat::sIdentity(), MotionType,
+					MotionType == EMotionType::Static ? Layers::NON_MOVING : Layers::MOVING);
+				Body &Sphere = Context.CreateBody(SphereSettings, MotionType == EMotionType::Static ? EActivation::DontActivate : EActivation::Activate);
+				if (MotionType == EMotionType::Kinematic)
+					Sphere.SetLinearVelocity(Vec3(-1.0f, 0.0f, 0.0f));
+				SoftBodyCreationSettings SoftSettings(Shared, RVec3::sZero(), Quat::sIdentity(), Layers::MOVING);
+				SoftSettings.mVelocityReconstruction = ESoftBodyVelocityReconstruction::ConstraintDelta;
+				SoftSettings.mNumIterations = 1;
+				SoftSettings.mNumConstraintIterations = 2;
+				SoftSettings.mLinearDamping = 0.0f;
+				SoftSettings.mAllowSleeping = false;
+				SoftSettings.mUpdatePosition = false;
+				SoftSettings.mVertexRadius = 0.05f;
+				Body &Soft = *Context.GetBodyInterface().CreateSoftBody(SoftSettings);
+				Context.GetBodyInterface().AddBody(Soft.GetID(), EActivation::Activate);
+				Context.SimulateSingleStep();
+				Vec3 Velocity = static_cast<SoftBodyMotionProperties *>(Soft.GetMotionProperties())->GetVertex(0).mVelocity;
+				CHECK(!Velocity.IsNaN());
+				if (MotionType == EMotionType::Static)
+					(Relative ? StaticOn : StaticOff) = Velocity;
+				else
+					(Relative ? KinematicOn : KinematicOff) = Velocity;
+			}
+		CHECK(StaticOn == StaticOff);
+		CHECK(KinematicOn.GetX() < KinematicOff.GetX() - 0.1f);
 	}
 }

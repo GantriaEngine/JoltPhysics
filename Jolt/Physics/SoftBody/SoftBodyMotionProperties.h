@@ -284,7 +284,7 @@ private:
 	void								ApplyLRAConstraints(uint inStartIndex, uint inEndIndex);
 
 	/// Enforce all collision constraints & update all velocities according the XPBD algorithm
-	void								ApplyCollisionConstraintsAndUpdateVelocities(const SoftBodyUpdateContext &inContext, Vec3 *outClothVelocityImpulse = nullptr, Vec3 *outDynamicRigidVelocityImpulse = nullptr, double *outClothKineticDelta = nullptr, const Array<float> *inContactLambdas = nullptr);
+	void								ApplyCollisionConstraintsAndUpdateVelocities(const SoftBodyUpdateContext &inContext, Vec3 *outClothVelocityImpulse = nullptr, Vec3 *outDynamicRigidVelocityImpulse = nullptr, double *outClothKineticDelta = nullptr, const Array<float> *inContactLambdas = nullptr, bool inKinematicRelativeVelocity = false, double *outKinematicVelocityWork = nullptr);
 
 	/// Private alternating-order experiment: position projection without velocity impulses
 	bool								ProjectCollisionPositionsOnly();
