@@ -935,7 +935,7 @@ void SoftBodyMotionProperties::LogContactStage(uint64 inIntegration, uint32 inBo
 		KineticEnergy, SumPositionDelta, MaxPositionDelta);
 }
 
-void SoftBodyMotionProperties::ApplyCollisionConstraintsAndUpdateVelocities(const SoftBodyUpdateContext &inContext, Vec3 *outClothVelocityImpulse, Vec3 *outDynamicRigidVelocityImpulse, double *outClothKineticDelta)
+void SoftBodyMotionProperties::ApplyCollisionConstraintsAndUpdateVelocities(const SoftBodyUpdateContext &inContext, Vec3 *outClothVelocityImpulse, Vec3 *outDynamicRigidVelocityImpulse, double *outClothKineticDelta, const Array<float> *inContactLambdas)
 {
 	JPH_PROFILE_FUNCTION();
 
@@ -960,7 +960,12 @@ void SoftBodyMotionProperties::ApplyCollisionConstraintsAndUpdateVelocities(cons
 			{
 				// Check if there is a collision
 				float projected_distance = -v.mCollisionPlane.SignedDistance(v.mPosition) + vertex_radius;
-				if (projected_distance > 0.0f)
+				CollidingShape &cs = mCollidingShapes[v.mCollidingShapeIndex];
+				float retained_contact_distance = 0.0f;
+				if (inContactLambdas != nullptr && cs.mMotionType != EMotionType::Dynamic)
+					retained_contact_distance = cs.mSoftBodyInvMassScale * v.mInvMass
+						* (*inContactLambdas)[uint(&v - mVertices.data())];
+				if (projected_distance > 0.0f || retained_contact_distance > 0.0f)
 				{
 					const Vec3 VelocityBeforeContact = v.mVelocity;
 					// Remember that there was a collision
@@ -970,9 +975,9 @@ void SoftBodyMotionProperties::ApplyCollisionConstraintsAndUpdateVelocities(cons
 					RequestContactCallback();
 
 					// Note that we already calculated the velocity, so this does not affect the velocity (next iteration starts by setting previous position to current position)
-					CollidingShape &cs = mCollidingShapes[v.mCollidingShapeIndex];
 					Vec3 contact_normal = v.mCollisionPlane.GetNormal();
-					v.mPosition += contact_normal * projected_distance;
+					if (projected_distance > 0.0f)
+						v.mPosition += contact_normal * projected_distance;
 
 					// Apply friction as described in Detailed Rigid Body Simulation with Extended Position Based Dynamics - Matthias Muller et al.
 					// See section 3.6:
@@ -1050,7 +1055,7 @@ void SoftBodyMotionProperties::ApplyCollisionConstraintsAndUpdateVelocities(cons
 
 						// Apply friction (modified equation 31)
 						if (v_tangential_length > 0.0f)
-							v.mVelocity -= v_tangential * min(cs.mFriction * projected_distance / (v_tangential_length * dt), 1.0f);
+							v.mVelocity -= v_tangential * min(cs.mFriction * max(projected_distance, retained_contact_distance) / (v_tangential_length * dt), 1.0f);
 
 						// Apply restitution (equation 35)
 						v.mVelocity -= v_normal;
@@ -1348,12 +1353,13 @@ SoftBodyMotionProperties::EStatus SoftBodyMotionProperties::ParallelApplyConstra
 				const bool OrderC = ContactOrder != nullptr && ContactOrder[0] == 'C' && ContactOrder[1] == '\0';
 				const bool OrderD = ContactOrder != nullptr && ContactOrder[0] == 'D' && ContactOrder[1] == '\0';
 				const bool OrderE = ContactOrder != nullptr && ContactOrder[0] == 'E' && ContactOrder[1] == '\0';
+				const bool OrderF = ContactOrder != nullptr && ContactOrder[0] == 'F' && ContactOrder[1] == '\0';
 				const char *StageFlag = std::getenv("GANTRIA_CONTACT_STAGES");
 				const bool RecordStages = mVertices.size() == 16384 && StageFlag != nullptr
 					&& StageFlag[0] == '1' && StageFlag[1] == '\0';
 				const uint64 StageIntegration = RecordStages ? mContactStageIntegrationIndex++ : 0;
 				const uint32 StageBodyID = RecordStages ? ioContext.mBody->GetID().GetIndexAndSequenceNumber() : 0;
-				const char *StageMode = OrderB ? "B" : OrderC ? "C" : OrderD ? "D" : OrderE ? "E" : "A";
+				const char *StageMode = OrderB ? "B" : OrderC ? "C" : OrderD ? "D" : OrderE ? "E" : OrderF ? "F" : "A";
 				auto SavePositions = [this, RecordStages]()
 				{
 					Array<Vec3> Positions;
@@ -1371,8 +1377,8 @@ SoftBodyMotionProperties::EStatus SoftBodyMotionProperties::ParallelApplyConstra
 						LogContactStage(StageIntegration, StageBodyID, StageMode, Name, Previous);
 				};
 				LogStage("PreContact", nullptr);
-				uint ContactPasses = OrderD ? 4 : 1;
-				if (OrderC || OrderD)
+				uint ContactPasses = OrderD || OrderF ? 4 : 1;
+				if (OrderC || OrderD || OrderF)
 				{
 					const char *PassCount = std::getenv("GANTRIA_CONTACT_PASSES");
 					if (PassCount != nullptr && PassCount[0] >= '1' && PassCount[0] <= '4' && PassCount[1] == '\0')
@@ -1404,11 +1410,12 @@ SoftBodyMotionProperties::EStatus SoftBodyMotionProperties::ParallelApplyConstra
 						LogStage("PostStructure", &BeforeStructure);
 					}
 				}
-				if (OrderD)
+				Array<float> ContactLambdas;
+				if (OrderD || OrderF)
 				{
 					// Unilateral hard-contact XPBD (compliance zero) with a
 					// per-vertex multiplier retained only within this integration.
-					Array<float> ContactLambdas(mVertices.size(), 0.0f);
+					ContactLambdas.resize(mVertices.size(), 0.0f);
 					for (uint Pass = 0; Pass < ContactPasses; ++Pass)
 					{
 						Array<Vec3> BeforeContact = SavePositions();
@@ -1422,6 +1429,12 @@ SoftBodyMotionProperties::EStatus SoftBodyMotionProperties::ParallelApplyConstra
 						LogStage("PostStructure", &BeforeStructure);
 					}
 				}
+				if (OrderF)
+				{
+					Array<Vec3> BeforeContact = SavePositions();
+					ProjectCollisionPositionsWithLambda(ContactLambdas);
+					LogStage("FinalMultiplierContact", &BeforeContact);
+				}
 				if (OrderE)
 				{
 					if (RefreshCollisionPlanes())
@@ -1433,7 +1446,8 @@ SoftBodyMotionProperties::EStatus SoftBodyMotionProperties::ParallelApplyConstra
 				ApplyCollisionConstraintsAndUpdateVelocities(ioContext,
 					RecordStages ? &ClothVelocityImpulse : nullptr,
 					RecordStages ? &DynamicRigidVelocityImpulse : nullptr,
-					RecordStages ? &ClothKineticDelta : nullptr);
+					RecordStages ? &ClothKineticDelta : nullptr,
+					OrderF ? &ContactLambdas : nullptr);
 				LogStage("FinalContact", &BeforeFinalContact);
 				if (RecordStages)
 				{

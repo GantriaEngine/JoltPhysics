@@ -12,6 +12,7 @@ authored material, and Engine public API are separate from this source.
 | `C` | Position-only contact projection, complete structural pass, then original final contact/velocity update. Repeat the contact/structure pair with `GANTRIA_CONTACT_PASSES=1..4`; default 1. |
 | `D` | Unilateral hard-contact multiplier projection alternating with complete structural passes, then original final contact/velocity update. The multiplier lives for one temporal integration. Default 4 passes; `GANTRIA_CONTACT_PASSES=1..4` allows matched C/D pass counts. Dynamic rigid contacts retain A handling; D does not pretend to apply a coupled rigid position correction. |
 | `E` | Refresh vertex contact planes from post-structure positions before A's final contact update. Existing colliding shape transforms remain fixed for that soft update. Any CCD marker leaves the old plane path intact. No out-of-plane tie-break is imposed. |
+| `F` | D's unilateral contact/structure alternations, followed by a final multiplier projection. The one final velocity update treats retained normal support as active contact and uses its equivalent normal correction distance for the existing friction cap. `GANTRIA_CONTACT_PASSES=1..4` allows F1/F4 controls. Dynamic contacts retain A. |
 
 C and D continue the retained structural multipliers after Q2, without another
 temporal integration. Their extra passes stop when the preceding contact phase
@@ -29,6 +30,10 @@ does not account for earlier contact correction or D's retained contact
 multiplier. A lower strain or zero penetration result cannot be accepted until
 normal impulse, friction, restitution, and external-work accounting are made
 consistent and independently qualified.
+F repairs this specific missing-support path for static/kinematic contacts,
+but its multiplier/friction mapping remains experimental. It does not make
+static pose jumps have a measurable actuator work term or solve the planar
+deformation by itself. Full trace and contact/momentum gates decide acceptance.
 
 `GANTRIA_CONTACT_STAGES=1` on a single 128×128 cloth logs
 `[Physics:ContactStage]` CSV rows at precontact, intermediate contact,

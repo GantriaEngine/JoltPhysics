@@ -477,7 +477,7 @@ TEST_SUITE("SoftBodyConstraintConvergenceTests")
 	{
 		Ref<SoftBodySharedSettings> Shared = MakeChain();
 		Vec3 BaselinePosition[3], BaselineVelocity[3];
-		for (const char *Order : { "", "B", "C", "D", "E" })
+		for (const char *Order : { "", "B", "C", "D", "E", "F" })
 		{
 			ScopedContactOrder Environment(*Order != '\0' ? Order : nullptr);
 			CHECK(Environment.mSetSucceeded);
@@ -523,7 +523,7 @@ TEST_SUITE("SoftBodyConstraintConvergenceTests")
 			}
 		Shared->CalculateEdgeLengths();
 		Shared->Optimize();
-		for (const char *Order : { "", "B", "C", "D", "E" })
+		for (const char *Order : { "", "B", "C", "D", "E", "F" })
 		{
 			ScopedContactOrder Environment(*Order != '\0' ? Order : nullptr);
 			CHECK(Environment.mSetSucceeded);
