@@ -292,8 +292,17 @@ private:
 	/// Private unilateral hard-contact XPBD multiplier experiment (static/kinematic only)
 	bool								ProjectCollisionPositionsWithLambda(Array<float> &ioLambdas);
 
-	/// Private sphere/triangle geometry diagnostic; does not update velocity or rigid momentum
-	uint								ProjectSphereFacePositions();
+	struct FaceContactStats
+	{
+		uint							Corrections = 0;
+		Vec3							ClothVelocityImpulse = Vec3::sZero();
+		double							KinematicVelocityWork = 0.0;
+		double							ClothKineticDelta = 0.0;
+		float							MaxPenetration = 0.0f;
+	};
+
+	/// Private sphere/triangle geometry diagnostic, with optional velocity impulse response
+	FaceContactStats					ProjectSphereFacePositions(const SoftBodyUpdateContext &inContext, bool inResolveVelocity);
 
 	/// Private normal-refresh experiment: recompute vertex planes after the structural solve
 	bool								RefreshCollisionPlanes();

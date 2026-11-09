@@ -912,9 +912,9 @@ static Vec3 GetContactFaceWeights(Vec3Arg inPoint, Vec3Arg inA, Vec3Arg inB, Vec
 	return Vec3(1.0f - V - W, V, W);
 }
 
-uint SoftBodyMotionProperties::ProjectSphereFacePositions()
+SoftBodyMotionProperties::FaceContactStats SoftBodyMotionProperties::ProjectSphereFacePositions(const SoftBodyUpdateContext &inContext, bool inResolveVelocity)
 {
-	uint Corrections = 0;
+	FaceContactStats Stats;
 	for (const CollidingShape &Shape : mCollidingShapes)
 	{
 		if (Shape.mMotionType == EMotionType::Dynamic || Shape.mSoftBodyInvMassScale <= 0.0f)
@@ -942,8 +942,8 @@ uint SoftBodyMotionProperties::ProjectSphereFacePositions()
 				const float Distance = Delta.Length();
 				if (Distance >= Radius)
 					continue;
-				const float EffectiveInvMass = Shape.mSoftBodyInvMassScale *
-					(A.mInvMass * WA * WA + B.mInvMass * WB * WB + C.mInvMass * WC * WC);
+				const float VelocityInvMass = A.mInvMass * WA * WA + B.mInvMass * WB * WB + C.mInvMass * WC * WC;
+				const float EffectiveInvMass = Shape.mSoftBodyInvMassScale * VelocityInvMass;
 				if (EffectiveInvMass <= 1.0e-9f)
 					continue;
 				// At exact center-on-face symmetry, winding explicitly selects a
@@ -953,11 +953,49 @@ uint SoftBodyMotionProperties::ProjectSphereFacePositions()
 				A.mPosition += Shape.mSoftBodyInvMassScale * A.mInvMass * WA * Correction;
 				B.mPosition += Shape.mSoftBodyInvMassScale * B.mInvMass * WB * Correction;
 				C.mPosition += Shape.mSoftBodyInvMassScale * C.mInvMass * WC * Correction;
-				++Corrections;
+				++Stats.Corrections;
+				Stats.MaxPenetration = max(Stats.MaxPenetration, Radius - Distance);
+				if (inResolveVelocity)
+				{
+				// Resolve one actual face-point velocity contact. The
+				// prescribed static/kinematic body receives no velocity change.
+				const Vec3 SurfacePoint = Center + (Radius - mVertexRadius) * Normal;
+				const Vec3 SurfaceVelocity = Shape.mMotionType == EMotionType::Kinematic ?
+					Shape.GetPointVelocity(SurfacePoint - Shape.mCenterOfMassTransform.GetTranslation()) : Vec3::sZero();
+				const Vec3 PointVelocity = WA * A.mVelocity + WB * B.mVelocity + WC * C.mVelocity;
+				const Vec3 RelativeVelocity = PointVelocity - SurfaceVelocity;
+				const float NormalSpeed = RelativeVelocity.Dot(Normal);
+				const float NormalImpulse = max(0.0f, -NormalSpeed / VelocityInvMass);
+				const Vec3 TangentialVelocity = RelativeVelocity - NormalSpeed * Normal;
+				const float TangentialSpeed = TangentialVelocity.Length();
+				// Positional normal multiplier depth/W has units kg*m; /dt
+				// gives its impulse-equivalent support for a Coulomb cap.
+				const float SupportImpulse = max(NormalImpulse,
+					(Radius - Distance) / (VelocityInvMass * inContext.mSubStepDeltaTime));
+				Vec3 Impulse = NormalImpulse * Normal;
+				if (TangentialSpeed > 0.0f)
+					Impulse -= (TangentialVelocity / TangentialSpeed) *
+						min(Shape.mFriction * SupportImpulse, TangentialSpeed / VelocityInvMass);
+				const double KineticBefore =
+					(A.mInvMass > 0.0f ? 0.5 * double(A.mVelocity.LengthSq()) / A.mInvMass : 0.0) +
+					(B.mInvMass > 0.0f ? 0.5 * double(B.mVelocity.LengthSq()) / B.mInvMass : 0.0) +
+					(C.mInvMass > 0.0f ? 0.5 * double(C.mVelocity.LengthSq()) / C.mInvMass : 0.0);
+				A.mVelocity += A.mInvMass * WA * Impulse;
+				B.mVelocity += B.mInvMass * WB * Impulse;
+				C.mVelocity += C.mInvMass * WC * Impulse;
+				const double KineticAfter =
+					(A.mInvMass > 0.0f ? 0.5 * double(A.mVelocity.LengthSq()) / A.mInvMass : 0.0) +
+					(B.mInvMass > 0.0f ? 0.5 * double(B.mVelocity.LengthSq()) / B.mInvMass : 0.0) +
+					(C.mInvMass > 0.0f ? 0.5 * double(C.mVelocity.LengthSq()) / C.mInvMass : 0.0);
+				Stats.ClothVelocityImpulse += Impulse;
+				Stats.ClothKineticDelta += KineticAfter - KineticBefore;
+				if (Shape.mMotionType == EMotionType::Kinematic)
+					Stats.KinematicVelocityWork += double(Impulse.Dot(SurfaceVelocity));
+			}
 			}
 		}
 	}
-	return Corrections;
+	return Stats;
 }
 
 bool SoftBodyMotionProperties::RefreshCollisionPlanes()
@@ -1483,6 +1521,7 @@ SoftBodyMotionProperties::EStatus SoftBodyMotionProperties::ParallelApplyConstra
 				const bool OrderE = ContactOrder != nullptr && ContactOrder[0] == 'E' && ContactOrder[1] == '\0';
 				const bool OrderF = ContactOrder != nullptr && ContactOrder[0] == 'F' && ContactOrder[1] == '\0';
 				const bool OrderH = ContactOrder != nullptr && ContactOrder[0] == 'H' && ContactOrder[1] == '\0';
+				const bool OrderI = ContactOrder != nullptr && ContactOrder[0] == 'I' && ContactOrder[1] == '\0';
 				const char *KinematicFlag = std::getenv("GANTRIA_CONTACT_KINEMATIC_RELATIVE");
 				const bool KinematicRelativeVelocity = KinematicFlag != nullptr
 					&& KinematicFlag[0] == '1' && KinematicFlag[1] == '\0';
@@ -1490,10 +1529,10 @@ SoftBodyMotionProperties::EStatus SoftBodyMotionProperties::ParallelApplyConstra
 				const bool RecordStages = mVertices.size() == 16384 && StageFlag != nullptr
 					&& StageFlag[0] == '1' && StageFlag[1] == '\0';
 				const char *FaceFlag = std::getenv("GANTRIA_CONTACT_FACE_DIAGNOSTIC");
-				const bool RecordFaces = OrderH && FaceFlag != nullptr && FaceFlag[0] == '1' && FaceFlag[1] == '\0';
+				const bool RecordFaces = (OrderH || OrderI) && FaceFlag != nullptr && FaceFlag[0] == '1' && FaceFlag[1] == '\0';
 				const uint64 StageIntegration = RecordStages || RecordFaces ? mContactStageIntegrationIndex++ : 0;
 				const uint32 StageBodyID = RecordStages || RecordFaces ? ioContext.mBody->GetID().GetIndexAndSequenceNumber() : 0;
-				const char *StageMode = OrderB ? "B" : OrderC ? "C" : OrderD ? "D" : OrderE ? "E" : OrderF ? "F" : OrderH ? "H" : "A";
+				const char *StageMode = OrderB ? "B" : OrderC ? "C" : OrderD ? "D" : OrderE ? "E" : OrderF ? "F" : OrderH ? "H" : OrderI ? "I" : "A";
 				auto SavePositions = [this, RecordStages]()
 				{
 					Array<Vec3> Positions;
@@ -1597,14 +1636,24 @@ SoftBodyMotionProperties::EStatus SoftBodyMotionProperties::ParallelApplyConstra
 						DynamicRigidVelocityImpulse.GetX(), DynamicRigidVelocityImpulse.GetY(), DynamicRigidVelocityImpulse.GetZ(),
 						ClothKineticDelta, KinematicVelocityWork);
 				}
-				if (OrderH)
+				if (OrderH || OrderI)
 				{
 				Array<Vec3> BeforeFace = SavePositions();
-				const uint FaceCorrections = ProjectSphereFacePositions();
+				const FaceContactStats FaceStats = ProjectSphereFacePositions(ioContext, OrderI);
 				LogStage("FaceContact", &BeforeFace);
 				if (RecordFaces)
-					std::fprintf(stdout, "[Physics:FaceContact] integration=%llu body=%u corrections=%u velocity_response=INCOMPLETE rigid_reaction=INCOMPLETE\n",
-						static_cast<unsigned long long>(StageIntegration), StageBodyID, FaceCorrections);
+				{
+					if (OrderI)
+						std::fprintf(stdout, "[Physics:FaceContact] integration=%llu body=%u mode=I corrections=%u max_penetration_m=%.9g cloth_impulse_local_ns=%.9g,%.9g,%.9g computed_prescribed_reaction_local_ns=%.9g,%.9g,%.9g kinematic_velocity_work_j=%.9g cloth_velocity_kinetic_delta_j=%.9g\n",
+							static_cast<unsigned long long>(StageIntegration), StageBodyID,
+							FaceStats.Corrections, FaceStats.MaxPenetration,
+							FaceStats.ClothVelocityImpulse.GetX(), FaceStats.ClothVelocityImpulse.GetY(), FaceStats.ClothVelocityImpulse.GetZ(),
+							-FaceStats.ClothVelocityImpulse.GetX(), -FaceStats.ClothVelocityImpulse.GetY(), -FaceStats.ClothVelocityImpulse.GetZ(),
+							FaceStats.KinematicVelocityWork, FaceStats.ClothKineticDelta);
+					else
+						std::fprintf(stdout, "[Physics:FaceContact] integration=%llu body=%u mode=H corrections=%u max_penetration_m=%.9g velocity_response=INCOMPLETE rigid_reaction=INCOMPLETE\n",
+							static_cast<unsigned long long>(StageIntegration), StageBodyID, FaceStats.Corrections, FaceStats.MaxPenetration);
+				}
 				}
 
 				// Private contact-order experiment B: relax the structure after the

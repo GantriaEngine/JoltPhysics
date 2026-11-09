@@ -14,6 +14,7 @@ authored material, and Engine public API are separate from this source.
 | `E` | Refresh vertex contact planes from post-structure positions before A's final contact update. Existing colliding shape transforms remain fixed for that soft update. Any CCD marker leaves the old plane path intact. No out-of-plane tie-break is imposed. |
 | `F` | D's unilateral contact/structure alternations, followed by a final multiplier projection. The one final velocity update treats retained normal support as active contact and uses its equivalent normal correction distance for the existing friction cap. `GANTRIA_CONTACT_PASSES=1..4` allows F1/F4 controls. Dynamic contacts retain A. |
 | `H` | After A's vertex response, project closest cloth triangle points out of collected static/kinematic sphere leaves using barycentric inverse-mass weights. Dynamic sphere contacts remain A. H is a geometry-only diagnostic: face correction does not reconstruct cloth velocity, apply face friction, or react on the rigid body. |
+| `I` | H's face projection followed by an actual barycentric face-point velocity impulse for static/kinematic spheres. Cancels approaching relative normal speed and caps tangential impulse using friction times the larger of the normal velocity impulse and projection-depth support impulse. Dynamic sphere contacts remain A. |
 
 `GANTRIA_CONTACT_KINEMATIC_RELATIVE=1` is a separate G velocity-response
 switch, combinable with A or F. On kinematic contacts only, it calculates
@@ -61,6 +62,18 @@ solver fix. `GANTRIA_CONTACT_FACE_DIAGNOSTIC=1` emits correction counts; the
 log marks face velocity response and rigid reaction incomplete. It must be
 compared with the independent full trace's triangle penetration, edge strain,
 and energy gates before drawing any conclusion about geometry.
+I adds velocity response to that same geometry probe. For barycentric weights
+`b`, its inverse effective mass is `Σ(b²/m)`. The normal velocity impulse is
+unilateral; the friction limit uses `μ max(J_normal, depth/(W dt))`, where the
+second term is the position projection's impulse-equivalent normal support.
+Each vertex receives its share `inverse_mass × b × J`. The computed opposite
+reaction is logged for static/kinematic bodies but is not applied to their
+prescribed motion. The logger also sums the actual cloth kinetic-energy change
+and `J·v_surface` for kinematic contacts. This closes only the velocity impulse
+account; geometry projection, elastic-energy change, and externally imposed
+static pose jumps still require separate accounting. Exact center-on-face
+contact retains H's explicit winding-based side tie, so I is also experimental
+and not a double-sided physical solution by itself.
 
 `GANTRIA_CONTACT_STAGES=1` on a single 128×128 cloth logs
 `[Physics:ContactStage]` CSV rows at precontact, intermediate contact,

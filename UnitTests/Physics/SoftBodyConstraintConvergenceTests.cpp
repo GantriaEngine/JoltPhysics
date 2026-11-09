@@ -509,7 +509,7 @@ TEST_SUITE("SoftBodyConstraintConvergenceTests")
 	{
 		Ref<SoftBodySharedSettings> Shared = MakeChain();
 		Vec3 BaselinePosition[3], BaselineVelocity[3];
-		for (const char *Order : { "", "B", "C", "D", "E", "F", "H" })
+		for (const char *Order : { "", "B", "C", "D", "E", "F", "H", "I" })
 		{
 			ScopedContactOrder Environment(*Order != '\0' ? Order : nullptr);
 			CHECK(Environment.mSetSucceeded);
@@ -555,7 +555,7 @@ TEST_SUITE("SoftBodyConstraintConvergenceTests")
 			}
 		Shared->CalculateEdgeLengths();
 		Shared->Optimize();
-		for (const char *Order : { "", "B", "C", "D", "E", "F", "H" })
+		for (const char *Order : { "", "B", "C", "D", "E", "F", "H", "I" })
 		{
 			ScopedContactOrder Environment(*Order != '\0' ? Order : nullptr);
 			CHECK(Environment.mSetSucceeded);
@@ -652,7 +652,7 @@ TEST_SUITE("SoftBodyConstraintConvergenceTests")
 
 	TEST_CASE("TestSphereFaceProbeDetectsInteriorContactWithoutVertexContact")
 	{
-		const auto Run = [](bool inFace, bool inSphere, const char *inOrder)
+		const auto Run = [](bool inFace, bool inSphere, const char *inOrder, bool inMoving = false)
 		{
 			ScopedContactOrder Environment(inOrder);
 			CHECK(Environment.mSetSucceeded);
@@ -681,33 +681,51 @@ TEST_SUITE("SoftBodyConstraintConvergenceTests")
 			SoftSettings.mVertexRadius = 0.05f;
 			Body &Soft = *Context.GetBodyInterface().CreateSoftBody(SoftSettings);
 			Context.GetBodyInterface().AddBody(Soft.GetID(), EActivation::Activate);
+			auto *Motion = static_cast<SoftBodyMotionProperties *>(Soft.GetMotionProperties());
+			if (inMoving)
+				for (uint Index = 0; Index < 3; ++Index)
+					Motion->GetVertex(Index).mVelocity = Vec3(2.0f, 0.0f, 0.0f);
 			Context.SimulateSingleStep();
-			const auto *Motion = static_cast<SoftBodyMotionProperties *>(Soft.GetMotionProperties());
-			std::array<Vec3, 3> Positions;
+			std::array<Vec3, 6> State;
 			for (uint Index = 0; Index < 3; ++Index)
 			{
-				Positions[Index] = Motion->GetVertex(Index).mPosition;
-				CHECK(!Positions[Index].IsNaN());
-				CHECK(!Motion->GetVertex(Index).mVelocity.IsNaN());
+				State[Index] = Motion->GetVertex(Index).mPosition;
+				State[Index + 3] = Motion->GetVertex(Index).mVelocity;
+				CHECK(!State[Index].IsNaN());
+				CHECK(!State[Index + 3].IsNaN());
 			}
-			return Positions;
+			return State;
 		};
 		for (bool Face : { false, true })
 			for (bool Sphere : { false, true })
 			{
 				const auto Original = Run(Face, Sphere, nullptr);
-				const auto FaceProbe = Run(Face, Sphere, "H");
-				if (!Face || !Sphere)
-					for (uint Index = 0; Index < 3; ++Index)
-						CHECK(FaceProbe[Index] == Original[Index]);
-				else
+				for (const char *Order : { "H", "I" })
 				{
-					// The three vertices are at least 0.353 m from the
-					// center, outside sphere radius plus vertex radius (0.25 m).
-					for (uint Index = 0; Index < 3; ++Index)
-						CHECK(Original[Index].GetZ() == 0.0f);
-					CHECK(FaceProbe[0].GetZ() > 0.01f);
+					const auto FaceProbe = Run(Face, Sphere, Order);
+					if (!Face || !Sphere)
+						for (uint Index = 0; Index < 6; ++Index)
+							CHECK(FaceProbe[Index] == Original[Index]);
+					else
+					{
+						// The three vertices are at least 0.353 m from the
+						// center, outside sphere plus vertex radius (0.25 m).
+						for (uint Index = 0; Index < 3; ++Index)
+							CHECK(Original[Index].GetZ() == 0.0f);
+						CHECK(FaceProbe[0].GetZ() > 0.01f);
+					}
 				}
 			}
+		const auto GeometryOnly = Run(true, true, "H", true);
+		const auto ImpulseResponse = Run(true, true, "I", true);
+		float GeometryKinetic = 0.0f, ImpulseKinetic = 0.0f;
+		for (uint Index = 0; Index < 3; ++Index)
+		{
+			CHECK(GeometryOnly[Index] == ImpulseResponse[Index]);
+			GeometryKinetic += GeometryOnly[Index + 3].LengthSq();
+			ImpulseKinetic += ImpulseResponse[Index + 3].LengthSq();
+		}
+		CHECK(ImpulseKinetic <= GeometryKinetic + 1.0e-5f);
+		CHECK(ImpulseKinetic < GeometryKinetic - 0.1f);
 	}
 }
