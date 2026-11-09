@@ -809,6 +809,21 @@ void SoftBodyMotionProperties::ApplyLRAConstraints(uint inStartIndex, uint inEnd
 	}
 }
 
+void SoftBodyMotionProperties::ProjectCollisionPositionsOnly()
+{
+	for (Vertex &VertexState : mVertices)
+		if (VertexState.mInvMass > 0.0f && VertexState.mCollidingShapeIndex >= 0)
+		{
+			const float ProjectedDistance = -VertexState.mCollisionPlane.SignedDistance(VertexState.mPosition) + mVertexRadius;
+			if (ProjectedDistance > 0.0f)
+			{
+				VertexState.mHasContact = true;
+				RequestContactCallback();
+				VertexState.mPosition += VertexState.mCollisionPlane.GetNormal() * ProjectedDistance;
+			}
+		}
+}
+
 void SoftBodyMotionProperties::ApplyCollisionConstraintsAndUpdateVelocities(const SoftBodyUpdateContext &inContext)
 {
 	JPH_PROFILE_FUNCTION();
@@ -1210,13 +1225,23 @@ SoftBodyMotionProperties::EStatus SoftBodyMotionProperties::ParallelApplyConstra
 					return EStatus::DidWork;
 				}
 
+				const char *ContactOrder = std::getenv("GANTRIA_CONTACT_ORDER");
+				const bool OrderB = ContactOrder != nullptr && ContactOrder[0] == 'B' && ContactOrder[1] == '\0';
+				const bool OrderC = ContactOrder != nullptr && ContactOrder[0] == 'C' && ContactOrder[1] == '\0';
+				if (OrderC)
+				{
+					// Alternate one contact projection with one more complete
+					// structural pass. Retained Q2 multipliers continue from sweep 2.
+					ProjectCollisionPositionsOnly();
+					for (uint Group = 0; Group < mSettings->mUpdateGroups.size(); ++Group)
+						ProcessGroup(ioContext, Group);
+				}
 				ApplyCollisionConstraintsAndUpdateVelocities(ioContext);
 
 				// Private contact-order experiment B: relax the structure after the
 				// existing contact solve. Velocity was reconstructed above, so this
 				// mode is a diagnostic of ordering, not an accepted physical update.
-				const char *ContactOrder = std::getenv("GANTRIA_CONTACT_ORDER");
-				if (ContactOrder != nullptr && ContactOrder[0] == 'B' && ContactOrder[1] == '\0')
+				if (OrderB)
 					for (uint Group = 0; Group < mSettings->mUpdateGroups.size(); ++Group)
 						ProcessGroup(ioContext, Group);
 
