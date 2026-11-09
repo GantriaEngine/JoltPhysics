@@ -624,6 +624,35 @@ void SoftBodySharedSettings::CalculateSkinnedConstraintNormals()
 
 void SoftBodySharedSettings::Optimize(OptimizationResults &outResults)
 {
+	[[maybe_unused]] bool Optimized = Optimize(outResults, SoftBodyUpdateContext::cVertexConstraintBatch);
+	JPH_ASSERT(Optimized);
+}
+
+uint SoftBodySharedSettings::GetNumUpdateGroups() const
+{
+	return (uint)mUpdateGroups.size();
+}
+
+uint SoftBodySharedSettings::GetNumNonParallelEdgeConstraints() const
+{
+	if (mUpdateGroups.empty())
+		return 0;
+	return (uint)mEdgeConstraints.size() - (mUpdateGroups.size() > 1 ? mUpdateGroups[mUpdateGroups.size() - 2].mEdgeEndIndex : 0);
+}
+
+uint SoftBodySharedSettings::GetNumNonParallelVolumeConstraints() const
+{
+	if (mUpdateGroups.empty())
+		return 0;
+	return (uint)mVolumeConstraints.size() - (mUpdateGroups.size() > 1 ? mUpdateGroups[mUpdateGroups.size() - 2].mVolumeEndIndex : 0);
+}
+
+bool SoftBodySharedSettings::Optimize(OptimizationResults &outResults, uint inVertexConstraintBatch)
+{
+	if (inVertexConstraintBatch != 128 && inVertexConstraintBatch != 256
+		&& inVertexConstraintBatch != 512 && inVertexConstraintBatch != 1024)
+		return false;
+
 	// Clear any previous results
 	mUpdateGroups.clear();
 
@@ -811,8 +840,8 @@ void SoftBodySharedSettings::Optimize(OptimizationResults &outResults)
 			}
 
 			// Create a new group?
-			if (current_group.size() >= SoftBodyUpdateContext::cVertexConstraintBatch // If full, yes
-				|| (current_group.size() > SoftBodyUpdateContext::cVertexConstraintBatch / 2 && best_vertex == UINT_MAX)) // If half full and we found no connected vertex, yes
+			if (current_group.size() >= inVertexConstraintBatch // If full, yes
+				|| (current_group.size() > inVertexConstraintBatch / 2 && best_vertex == UINT_MAX)) // If half full and we found no connected vertex, yes
 			{
 				current_group.clear();
 				frontier.clear();
@@ -832,7 +861,7 @@ void SoftBodySharedSettings::Optimize(OptimizationResults &outResults)
 	}
 
 	// If the last group is more than half full, we'll keep it as a separate group, otherwise we merge it with the 'non parallel' group
-	if (current_group.size() > SoftBodyUpdateContext::cVertexConstraintBatch / 2)
+	if (current_group.size() > inVertexConstraintBatch / 2)
 		++current_group_idx;
 
 	// We no longer need the current group array, free the memory
@@ -1229,6 +1258,7 @@ void SoftBodySharedSettings::Optimize(OptimizationResults &outResults)
 	// Free closest kinematic buffer
 	mClosestKinematic.clear();
 	mClosestKinematic.shrink_to_fit();
+	return true;
 }
 
 Ref<SoftBodySharedSettings> SoftBodySharedSettings::Clone() const

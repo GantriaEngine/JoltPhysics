@@ -92,6 +92,14 @@ public:
 	/// Optimize the soft body settings for simulation. This will reorder constraints so they can be executed in parallel.
 	void				Optimize(OptimizationResults &outResults);
 
+	/// Experimental vertex-group size. Returns false for unsupported sizes without changing the settings or results.
+	bool				Optimize(OptimizationResults &outResults, uint inVertexConstraintBatch);
+
+	/// Read-only counts for profiling a preoptimized constraint graph.
+	uint				GetNumUpdateGroups() const;
+	uint				GetNumNonParallelEdgeConstraints() const;
+	uint				GetNumNonParallelVolumeConstraints() const;
+
 	/// Optimize the soft body settings without results
 	void				Optimize()									{ OptimizationResults results; Optimize(results); }
 

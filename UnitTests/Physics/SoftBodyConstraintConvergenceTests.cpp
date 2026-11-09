@@ -8,6 +8,8 @@
 #include <Jolt/Physics/SoftBody/SoftBodyCreationSettings.h>
 #include <Jolt/Physics/SoftBody/SoftBodyMotionProperties.h>
 #include <Jolt/Physics/SoftBody/SoftBodySharedSettings.h>
+#include <Jolt/Core/StreamWrapper.h>
+#include <sstream>
 
 TEST_SUITE("SoftBodyConstraintConvergenceTests")
 {
@@ -22,6 +24,39 @@ TEST_SUITE("SoftBodyConstraintConvergenceTests")
 		shared->CalculateEdgeLengths();
 		shared->Optimize();
 		return shared;
+	}
+
+	static Ref<SoftBodySharedSettings> MakeGroupingCloth()
+	{
+		Ref<SoftBodySharedSettings> Shared = new SoftBodySharedSettings;
+		constexpr uint Resolution = 20;
+		for (uint Y = 0; Y < Resolution; ++Y)
+			for (uint X = 0; X < Resolution; ++X)
+				Shared->mVertices.push_back(SoftBodySharedSettings::Vertex(Float3(float(X), float(Y), 0.0f), Float3(0, 0, 0), Y == 0 ? 0.0f : 1.0f));
+		for (uint Y = 0; Y < Resolution; ++Y)
+			for (uint X = 0; X < Resolution; ++X)
+			{
+				const uint Index = Y * Resolution + X;
+				if (X + 1 < Resolution)
+					Shared->mEdgeConstraints.emplace_back(Index, Index + 1, 0.001f);
+				if (Y + 1 < Resolution)
+					Shared->mEdgeConstraints.emplace_back(Index, Index + Resolution, 0.001f);
+				if (X + 1 < Resolution && Y + 1 < Resolution)
+					Shared->mEdgeConstraints.emplace_back(Index, Index + Resolution + 1, 0.001f);
+			}
+		Shared->mVertices.push_back(SoftBodySharedSettings::Vertex(Float3(0.0f, 0.0f, 1.0f)));
+		Shared->mVolumeConstraints.emplace_back(0, 1, Resolution, Resolution * Resolution, 0.001f);
+		Shared->CalculateEdgeLengths();
+		Shared->CalculateVolumeConstraintVolumes();
+		return Shared;
+	}
+
+	static std::string SaveSettings(const SoftBodySharedSettings &inSettings)
+	{
+		std::stringstream Stream;
+		StreamOutWrapper Wrapper(Stream);
+		inSettings.SaveBinaryState(Wrapper);
+		return Stream.str();
 	}
 
 	static Body &CreateSoft(PhysicsTestContext &inContext, const SoftBodySharedSettings *inShared, uint32 inSweeps)
@@ -253,6 +288,70 @@ TEST_SUITE("SoftBodyConstraintConvergenceTests")
 		{
 			CHECK_APPROX_EQUAL(SerialMotion->GetVertex(Index).mPosition, ParallelMotion->GetVertex(Index).mPosition, 1.0e-5f);
 			CHECK_APPROX_EQUAL(SerialMotion->GetVertex(Index).mVelocity, ParallelMotion->GetVertex(Index).mVelocity, 1.0e-5f);
+		}
+	}
+
+	TEST_CASE("TestDefaultGroupSizeMatchesExplicit256")
+	{
+		Ref<SoftBodySharedSettings> Source = MakeGroupingCloth();
+		Ref<SoftBodySharedSettings> Default = Source->Clone();
+		Ref<SoftBodySharedSettings> Explicit = Source->Clone();
+		SoftBodySharedSettings::OptimizationResults DefaultResults;
+		SoftBodySharedSettings::OptimizationResults ExplicitResults;
+		Default->Optimize(DefaultResults);
+		CHECK(Explicit->Optimize(ExplicitResults, 256));
+		CHECK(SaveSettings(*Default) == SaveSettings(*Explicit));
+		CHECK(DefaultResults.mEdgeRemap.size() == ExplicitResults.mEdgeRemap.size());
+		for (uint Index = 0; Index < DefaultResults.mEdgeRemap.size(); ++Index)
+			CHECK(DefaultResults.mEdgeRemap[Index] == ExplicitResults.mEdgeRemap[Index]);
+	}
+
+	TEST_CASE("TestUnsupportedGroupSizeDoesNotChangeSettingsOrResults")
+	{
+		Ref<SoftBodySharedSettings> Shared = MakeGroupingCloth();
+		SoftBodySharedSettings::OptimizationResults Results;
+		Results.mEdgeRemap.push_back(77);
+		Results.mVolumeRemap.push_back(9);
+		const std::string Before = SaveSettings(*Shared);
+		for (uint Batch : { 0u, 127u, 257u, 2048u })
+		{
+			CHECK_FALSE(Shared->Optimize(Results, Batch));
+			CHECK(SaveSettings(*Shared) == Before);
+			CHECK(Results.mEdgeRemap.size() == 1);
+			CHECK(Results.mEdgeRemap[0] == 77);
+			CHECK(Results.mVolumeRemap.size() == 1);
+			CHECK(Results.mVolumeRemap[0] == 9);
+		}
+	}
+
+	TEST_CASE("TestSupportedGroupSizesPreserveConstraintPermutation")
+	{
+		Ref<SoftBodySharedSettings> Source = MakeGroupingCloth();
+		for (uint Batch : { 128u, 256u, 512u, 1024u })
+		{
+			Ref<SoftBodySharedSettings> Shared = Source->Clone();
+			SoftBodySharedSettings::OptimizationResults Results;
+			CHECK(Shared->Optimize(Results, Batch));
+			CHECK(Shared->GetNumUpdateGroups() > 0);
+			CHECK(Shared->GetNumNonParallelEdgeConstraints() <= Shared->mEdgeConstraints.size());
+			CHECK(Shared->GetNumNonParallelVolumeConstraints() <= Shared->mVolumeConstraints.size());
+			CHECK(Results.mEdgeRemap.size() == Source->mEdgeConstraints.size());
+			CHECK(Results.mVolumeRemap.size() == Source->mVolumeConstraints.size());
+			CHECK(Results.mVolumeRemap[0] == 0);
+			Array<uint8> Seen(Results.mEdgeRemap.size(), 0);
+			for (uint OldIndex = 0; OldIndex < Results.mEdgeRemap.size(); ++OldIndex)
+			{
+				const uint NewIndex = Results.mEdgeRemap[OldIndex];
+				REQUIRE(NewIndex < Seen.size());
+				CHECK(Seen[NewIndex] == 0);
+				Seen[NewIndex] = 1;
+				const auto &OldEdge = Source->mEdgeConstraints[OldIndex];
+				const auto &NewEdge = Shared->mEdgeConstraints[NewIndex];
+				CHECK(OldEdge.mVertex[0] == NewEdge.mVertex[0]);
+				CHECK(OldEdge.mVertex[1] == NewEdge.mVertex[1]);
+				CHECK(OldEdge.mRestLength == NewEdge.mRestLength);
+				CHECK(OldEdge.mCompliance == NewEdge.mCompliance);
+			}
 		}
 	}
 }
