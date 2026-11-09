@@ -597,10 +597,14 @@ TEST_SUITE("SoftBodyConstraintConvergenceTests")
 		Ref<SoftBodySharedSettings> Shared = new SoftBodySharedSettings;
 		Shared->mVertices.emplace_back(Float3(0.0f, 0.0f, 0.0f));
 		Shared->Optimize();
-		Vec3 StaticOff, StaticOn, KinematicOff, KinematicOn;
-		for (EMotionType MotionType : { EMotionType::Static, EMotionType::Kinematic })
-			for (bool Relative : { false, true })
-			{
+		for (const char *Order : { "", "F" })
+		{
+			ScopedContactOrder OrderEnvironment(*Order != '\0' ? Order : nullptr);
+			CHECK(OrderEnvironment.mSetSucceeded);
+			Vec3 StaticOff, StaticOn, KinematicOff, KinematicOn;
+			for (EMotionType MotionType : { EMotionType::Static, EMotionType::Kinematic })
+				for (bool Relative : { false, true })
+				{
 				ScopedKinematicRelativeContact Environment(Relative);
 				CHECK(Environment.mSetSucceeded);
 				PhysicsTestContext Context;
@@ -627,8 +631,9 @@ TEST_SUITE("SoftBodyConstraintConvergenceTests")
 					(Relative ? StaticOn : StaticOff) = Velocity;
 				else
 					(Relative ? KinematicOn : KinematicOff) = Velocity;
-			}
-		CHECK(StaticOn == StaticOff);
-		CHECK(KinematicOn.GetX() < KinematicOff.GetX() - 0.1f);
+				}
+			CHECK(StaticOn == StaticOff);
+			CHECK(KinematicOn.GetX() < KinematicOff.GetX() - 0.1f);
+		}
 	}
 }
