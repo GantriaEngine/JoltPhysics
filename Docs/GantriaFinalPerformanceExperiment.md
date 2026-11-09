@@ -143,7 +143,11 @@ equivalence for arbitrary driven cloth. The bounded driven large-cloth fixture
 failed its predeclared quality gate in both frozen B and C. It remains an
 excluded negative control and cannot justify relaxing contact, pin, geometry,
 energy, or long-run gates. Single-worker cloth also consistently regressed in
-the full matrix. A representative driven 16K configuration must pass the
-original physical envelope, and pristine external-consumer compatibility must
-be checked, before promoting size 1024 beyond the private experiment. The
-default production grouping remains 256.
+the full matrix. The private experiment holds group size 1024 fixed across
+worker caps, so changing the cap does not itself select a different constraint
+graph and order. Switching to 256 at one worker would introduce a separate
+trajectory and qualification case; it was not part of the measured candidate.
+A representative driven 16K configuration must pass the original physical
+envelope before promoting size 1024 beyond the private experiment. The
+compile-only pristine-consumer compatibility check has passed. The default
+production grouping remains 256.
