@@ -295,6 +295,7 @@ private:
 	struct FaceContactStats
 	{
 		uint							Corrections = 0;
+		uint							SkippedUnsupportedShapes = 0;
 		Vec3							ContactImpulse = Vec3::sZero();
 		Vec3							MovableClothMomentumDelta = Vec3::sZero();
 		Vec3							ComputedPinReaction = Vec3::sZero();

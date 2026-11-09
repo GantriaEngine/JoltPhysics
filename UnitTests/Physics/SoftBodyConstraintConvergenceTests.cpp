@@ -652,7 +652,7 @@ TEST_SUITE("SoftBodyConstraintConvergenceTests")
 
 	TEST_CASE("TestSphereFaceProbeDetectsInteriorContactWithoutVertexContact")
 	{
-		const auto Run = [](bool inFace, bool inSphere, const char *inOrder, bool inMoving = false)
+		const auto Run = [](bool inFace, bool inSphere, const char *inOrder, bool inMoving = false, float inRestitution = 0.0f)
 		{
 			ScopedContactOrder Environment(inOrder);
 			CHECK(Environment.mSetSucceeded);
@@ -669,6 +669,7 @@ TEST_SUITE("SoftBodyConstraintConvergenceTests")
 			{
 				BodyCreationSettings SphereSettings(new SphereShape(0.2f), RVec3(0.25, 0.25, 0.0),
 					Quat::sIdentity(), EMotionType::Static, Layers::NON_MOVING);
+				SphereSettings.mRestitution = inRestitution;
 				Context.CreateBody(SphereSettings, EActivation::DontActivate);
 			}
 			SoftBodyCreationSettings SoftSettings(Shared, RVec3::sZero(), Quat::sIdentity(), Layers::MOVING);
@@ -727,5 +728,9 @@ TEST_SUITE("SoftBodyConstraintConvergenceTests")
 		}
 		CHECK(ImpulseKinetic <= GeometryKinetic + 1.0e-5f);
 		CHECK(ImpulseKinetic < GeometryKinetic - 0.1f);
+		const auto RestitutionOriginal = Run(true, true, nullptr, true, 0.5f);
+		const auto RestitutionUnsupported = Run(true, true, "I", true, 0.5f);
+		for (uint Index = 0; Index < 6; ++Index)
+			CHECK(RestitutionUnsupported[Index] == RestitutionOriginal[Index]);
 	}
 }

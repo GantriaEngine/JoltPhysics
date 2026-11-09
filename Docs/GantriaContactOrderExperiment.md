@@ -64,7 +64,8 @@ compared with the independent full trace's triangle penetration, edge strain,
 and energy gates before drawing any conclusion about geometry.
 I adds velocity response to that same geometry probe. For barycentric weights
 `b`, its inverse effective mass is `Σ(b²/m)`. The normal velocity impulse is
-unilateral; the friction limit uses `μ max(J_normal, depth/(W dt))`, where the
+unilateral and inelastic; separating contact is never pulled back. The friction limit uses
+`μ max(J_normal, depth/(W dt))`, where the
 second term is the position projection's impulse-equivalent normal support.
 Each vertex receives its share `inverse_mass × b × J`. If a face includes a
 pin, movable-vertex momentum changes by only the sum of its barycentric shares
@@ -77,6 +78,10 @@ account; geometry projection, elastic-energy change, and externally imposed
 static pose jumps still require separate accounting. Exact center-on-face
 contact retains H's explicit winding-based side tie, so I is also experimental
 and not a double-sided physical solution by itself.
+I handles only contacts whose soft inverse-mass scale is exactly one and whose
+restitution is zero. Other settings retain A's vertex response and are counted
+as skipped in the diagnostic row; the face path does not silently substitute
+physical masses or an inelastic response for the requested material behavior.
 
 `GANTRIA_CONTACT_STAGES=1` on a single 128×128 cloth logs
 `[Physics:ContactStage]` CSV rows at precontact, intermediate contact,

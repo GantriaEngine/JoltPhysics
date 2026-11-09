@@ -914,11 +914,20 @@ static Vec3 GetContactFaceWeights(Vec3Arg inPoint, Vec3Arg inA, Vec3Arg inB, Vec
 
 SoftBodyMotionProperties::FaceContactStats SoftBodyMotionProperties::ProjectSphereFacePositions(const SoftBodyUpdateContext &inContext, bool inResolveVelocity)
 {
+	JPH_PROFILE_FUNCTION();
 	FaceContactStats Stats;
 	for (const CollidingShape &Shape : mCollidingShapes)
 	{
 		if (Shape.mMotionType == EMotionType::Dynamic || Shape.mSoftBodyInvMassScale <= 0.0f)
 			continue; // Coupled rigid position correction is outside H.
+		if (inResolveVelocity && (Shape.mSoftBodyInvMassScale != 1.0f || Shape.mRestitution != 0.0f))
+		{
+			// I's impulse/energy accounting uses the physical vertex
+			// masses and an inelastic normal target. Preserve original
+			// vertex contact for unsupported material response settings.
+			++Stats.SkippedUnsupportedShapes;
+			continue;
+		}
 		for (const LeafShape &Leaf : Shape.mShapes)
 		{
 			if (Leaf.mShape->GetSubType() != EShapeSubType::Sphere)
@@ -1650,9 +1659,9 @@ SoftBodyMotionProperties::EStatus SoftBodyMotionProperties::ParallelApplyConstra
 				if (RecordFaces)
 				{
 					if (OrderI)
-						std::fprintf(stdout, "[Physics:FaceContact] integration=%llu body=%u mode=I corrections=%u max_penetration_m=%.9g contact_impulse_local_ns=%.9g,%.9g,%.9g movable_cloth_momentum_delta_local_ns=%.9g,%.9g,%.9g computed_pin_reaction_local_ns=%.9g,%.9g,%.9g computed_prescribed_reaction_local_ns=%.9g,%.9g,%.9g kinematic_velocity_work_j=%.9g cloth_velocity_kinetic_delta_j=%.9g\n",
+						std::fprintf(stdout, "[Physics:FaceContact] integration=%llu body=%u mode=I corrections=%u skipped_unsupported_shapes=%u max_penetration_m=%.9g contact_impulse_local_ns=%.9g,%.9g,%.9g movable_cloth_momentum_delta_local_ns=%.9g,%.9g,%.9g computed_pin_reaction_local_ns=%.9g,%.9g,%.9g computed_prescribed_reaction_local_ns=%.9g,%.9g,%.9g kinematic_velocity_work_j=%.9g cloth_velocity_kinetic_delta_j=%.9g\n",
 							static_cast<unsigned long long>(StageIntegration), StageBodyID,
-							FaceStats.Corrections, FaceStats.MaxPenetration,
+							FaceStats.Corrections, FaceStats.SkippedUnsupportedShapes, FaceStats.MaxPenetration,
 							FaceStats.ContactImpulse.GetX(), FaceStats.ContactImpulse.GetY(), FaceStats.ContactImpulse.GetZ(),
 							FaceStats.MovableClothMomentumDelta.GetX(), FaceStats.MovableClothMomentumDelta.GetY(), FaceStats.MovableClothMomentumDelta.GetZ(),
 							FaceStats.ComputedPinReaction.GetX(), FaceStats.ComputedPinReaction.GetY(), FaceStats.ComputedPinReaction.GetZ(),
