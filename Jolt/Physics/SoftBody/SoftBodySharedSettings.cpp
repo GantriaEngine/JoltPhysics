@@ -115,19 +115,29 @@ void SoftBodySharedSettings::CalculateClosestKinematic()
 	// Reserve output size
 	mClosestKinematic.resize(mVertices.size());
 
-	// Create a list of connected vertices
-	Array<Array<uint32>> connectivity;
-	connectivity.resize(mVertices.size());
+	// Keep each vertex's neighbors in the same insertion order as the edge and
+	// rod lists, while using one allocation instead of one vector per vertex.
+	Array<size_t> connectivity_offsets(mVertices.size() + 1, 0);
+	auto count_connection = [&connectivity_offsets](uint32 inV1, uint32 inV2) {
+		++connectivity_offsets[inV1 + 1];
+		++connectivity_offsets[inV2 + 1];
+	};
 	for (const Edge &e : mEdgeConstraints)
-	{
-		connectivity[e.mVertex[0]].push_back(e.mVertex[1]);
-		connectivity[e.mVertex[1]].push_back(e.mVertex[0]);
-	}
+		count_connection(e.mVertex[0], e.mVertex[1]);
 	for (const RodStretchShear &r : mRodStretchShearConstraints)
-	{
-		connectivity[r.mVertex[0]].push_back(r.mVertex[1]);
-		connectivity[r.mVertex[1]].push_back(r.mVertex[0]);
-	}
+		count_connection(r.mVertex[0], r.mVertex[1]);
+	for (size_t v = 1; v < connectivity_offsets.size(); ++v)
+		connectivity_offsets[v] += connectivity_offsets[v - 1];
+	Array<uint32> connectivity(connectivity_offsets.back());
+	Array<size_t> connectivity_cursor = connectivity_offsets;
+	auto add_connection = [&connectivity, &connectivity_cursor](uint32 inV1, uint32 inV2) {
+		connectivity[connectivity_cursor[inV1]++] = inV2;
+		connectivity[connectivity_cursor[inV2]++] = inV1;
+	};
+	for (const Edge &e : mEdgeConstraints)
+		add_connection(e.mVertex[0], e.mVertex[1]);
+	for (const RodStretchShear &r : mRodStretchShearConstraints)
+		add_connection(r.mVertex[0], r.mVertex[1]);
 
 	// Use Dijkstra's algorithm to find the closest kinematic vertex for each vertex
 	// See: https://en.wikipedia.org/wiki/Dijkstra's_algorithm
@@ -169,8 +179,9 @@ void SoftBodySharedSettings::CalculateClosestKinematic()
 		JPH_IF_ENABLE_ASSERTS(last_closest = current.mDistance;)
 
 		// Loop through all of its connected vertices
-		for (uint32 v : connectivity[current.mVertex])
+		for (size_t neighbor = connectivity_offsets[current.mVertex]; neighbor < connectivity_offsets[current.mVertex + 1]; ++neighbor)
 		{
+			uint32 v = connectivity[neighbor];
 			// Calculate distance from the current vertex to this target vertex and check if it is smaller
 			float new_distance = current.mDistance + (Vec3(mVertices[v].mPosition) - Vec3(mVertices[current.mVertex].mPosition)).Length();
 			if (new_distance < mClosestKinematic[v].mDistance)
@@ -621,56 +632,69 @@ void SoftBodySharedSettings::Optimize(OptimizationResults &outResults)
 		uint32	mVertex;
 		uint32	mCount;
 	};
-	Array<Array<Connection>> connectivity;
-	connectivity.resize(mVertices.size());
-	auto add_connection = [&connectivity](uint inV1, uint inV2) {
-			for (int i = 0; i < 2; ++i)
-			{
-				bool found = false;
-				for (Connection &c : connectivity[inV1])
-					if (c.mVertex == inV2)
-					{
-						c.mCount++;
-						found = true;
-						break;
-					}
-				if (!found)
-					connectivity[inV1].push_back({ inV2, 1 });
-
-				std::swap(inV1, inV2);
-			}
-		};
-	for (const Edge &c : mEdgeConstraints)
-		add_connection(c.mVertex[0], c.mVertex[1]);
-	for (const LRA &c : mLRAConstraints)
-		add_connection(c.mVertex[0], c.mVertex[1]);
-	for (const RodStretchShear &c : mRodStretchShearConstraints)
-		add_connection(c.mVertex[0], c.mVertex[1]);
-	for (const RodBendTwist &c : mRodBendTwistConstraints)
-	{
-		add_connection(mRodStretchShearConstraints[c.mRod[0]].mVertex[0], mRodStretchShearConstraints[c.mRod[1]].mVertex[0]);
-		add_connection(mRodStretchShearConstraints[c.mRod[0]].mVertex[1], mRodStretchShearConstraints[c.mRod[1]].mVertex[0]);
-		add_connection(mRodStretchShearConstraints[c.mRod[0]].mVertex[0], mRodStretchShearConstraints[c.mRod[1]].mVertex[1]);
-		add_connection(mRodStretchShearConstraints[c.mRod[0]].mVertex[1], mRodStretchShearConstraints[c.mRod[1]].mVertex[1]);
-	}
-	for (const DihedralBend &c : mDihedralBendConstraints)
-	{
-		add_connection(c.mVertex[0], c.mVertex[1]);
-		add_connection(c.mVertex[0], c.mVertex[2]);
-		add_connection(c.mVertex[0], c.mVertex[3]);
-		add_connection(c.mVertex[1], c.mVertex[2]);
-		add_connection(c.mVertex[1], c.mVertex[3]);
-		add_connection(c.mVertex[2], c.mVertex[3]);
-	}
-	for (const Volume &c : mVolumeConstraints)
-	{
-		add_connection(c.mVertex[0], c.mVertex[1]);
-		add_connection(c.mVertex[0], c.mVertex[2]);
-		add_connection(c.mVertex[0], c.mVertex[3]);
-		add_connection(c.mVertex[1], c.mVertex[2]);
-		add_connection(c.mVertex[1], c.mVertex[3]);
-		add_connection(c.mVertex[2], c.mVertex[3]);
-	}
+	auto for_each_connection = [this](auto &&inVisitor) {
+		for (const Edge &c : mEdgeConstraints)
+			inVisitor(c.mVertex[0], c.mVertex[1]);
+		for (const LRA &c : mLRAConstraints)
+			inVisitor(c.mVertex[0], c.mVertex[1]);
+		for (const RodStretchShear &c : mRodStretchShearConstraints)
+			inVisitor(c.mVertex[0], c.mVertex[1]);
+		for (const RodBendTwist &c : mRodBendTwistConstraints)
+		{
+			inVisitor(mRodStretchShearConstraints[c.mRod[0]].mVertex[0], mRodStretchShearConstraints[c.mRod[1]].mVertex[0]);
+			inVisitor(mRodStretchShearConstraints[c.mRod[0]].mVertex[1], mRodStretchShearConstraints[c.mRod[1]].mVertex[0]);
+			inVisitor(mRodStretchShearConstraints[c.mRod[0]].mVertex[0], mRodStretchShearConstraints[c.mRod[1]].mVertex[1]);
+			inVisitor(mRodStretchShearConstraints[c.mRod[0]].mVertex[1], mRodStretchShearConstraints[c.mRod[1]].mVertex[1]);
+		}
+		for (const DihedralBend &c : mDihedralBendConstraints)
+		{
+			inVisitor(c.mVertex[0], c.mVertex[1]);
+			inVisitor(c.mVertex[0], c.mVertex[2]);
+			inVisitor(c.mVertex[0], c.mVertex[3]);
+			inVisitor(c.mVertex[1], c.mVertex[2]);
+			inVisitor(c.mVertex[1], c.mVertex[3]);
+			inVisitor(c.mVertex[2], c.mVertex[3]);
+		}
+		for (const Volume &c : mVolumeConstraints)
+		{
+			inVisitor(c.mVertex[0], c.mVertex[1]);
+			inVisitor(c.mVertex[0], c.mVertex[2]);
+			inVisitor(c.mVertex[0], c.mVertex[3]);
+			inVisitor(c.mVertex[1], c.mVertex[2]);
+			inVisitor(c.mVertex[1], c.mVertex[3]);
+			inVisitor(c.mVertex[2], c.mVertex[3]);
+		}
+	};
+	// Upper-bound each vertex's degree, then use a single contiguous allocation.
+	// Duplicate neighbors are still coalesced in their original first-seen order.
+	Array<size_t> connectivity_offsets(mVertices.size() + 1, 0);
+	for_each_connection([&connectivity_offsets](uint inV1, uint inV2) {
+		++connectivity_offsets[inV1 + 1];
+		++connectivity_offsets[inV2 + 1];
+	});
+	for (size_t v = 1; v < connectivity_offsets.size(); ++v)
+		connectivity_offsets[v] += connectivity_offsets[v - 1];
+	Array<Connection> connectivity(connectivity_offsets.back());
+	Array<size_t> connectivity_lengths(mVertices.size(), 0);
+	auto add_connection = [&connectivity, &connectivity_offsets, &connectivity_lengths](uint inV1, uint inV2) {
+		for (int i = 0; i < 2; ++i)
+		{
+			Connection *begin = connectivity.data() + connectivity_offsets[inV1];
+			size_t &length = connectivity_lengths[inV1];
+			bool found = false;
+			for (size_t j = 0; j < length; ++j)
+				if (begin[j].mVertex == inV2)
+				{
+					begin[j].mCount++;
+					found = true;
+					break;
+				}
+			if (!found)
+				begin[length++] = { inV2, 1 };
+			std::swap(inV1, inV2);
+		}
+	};
+	for_each_connection(add_connection);
 	// Skinned constraints only update 1 vertex, so we don't need special logic here
 
 	// Maps each of the vertices to a group index
@@ -738,16 +762,17 @@ void SoftBodySharedSettings::Optimize(OptimizationResults &outResults)
 			uint best_num_connections = 0;
 			float best_dist_sq = FLT_MAX;
 			for (uint i = 0; i < (uint)current_group.size(); ++i) // For all vertices in the current group
-				for (const Connection &c : connectivity[current_group[i]]) // For all connections to other vertices
+				for (size_t ci = connectivity_offsets[current_group[i]]; ci < connectivity_offsets[current_group[i]] + connectivity_lengths[current_group[i]]; ++ci)
 				{
+					const Connection &c = connectivity[ci];
 					uint v = c.mVertex;
 					if (group_idx[v] == -1) // Ungrouped vertices only
 					{
 						// Count the number of connections to this group
 						uint num_connections = 0;
-						for (const Connection &v2 : connectivity[v])
-							if (group_idx[v2.mVertex] == current_group_idx)
-								num_connections += v2.mCount;
+						for (size_t vi = connectivity_offsets[v]; vi < connectivity_offsets[v] + connectivity_lengths[v]; ++vi)
+							if (group_idx[connectivity[vi].mVertex] == current_group_idx)
+								num_connections += connectivity[vi].mCount;
 
 						// Calculate distance to group centroid
 						float dist_sq = (Vec3(mVertices[v].mPosition) - Vec3(mVertices[current_group.front()].mPosition)).LengthSq();
@@ -796,6 +821,10 @@ void SoftBodySharedSettings::Optimize(OptimizationResults &outResults)
 	// We're done with the connectivity list, free the memory
 	connectivity.clear();
 	connectivity.shrink_to_fit();
+	connectivity_offsets.clear();
+	connectivity_offsets.shrink_to_fit();
+	connectivity_lengths.clear();
+	connectivity_lengths.shrink_to_fit();
 
 	// Assign the constraints to their groups
 	struct Group
