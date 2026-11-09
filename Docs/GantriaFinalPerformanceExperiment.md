@@ -12,8 +12,10 @@ clearing. The diff touches seven files (+620/−97 lines); the three Jolt runtim
 files are `SoftBodyMotionProperties.cpp` and `SoftBodySharedSettings.cpp/.h`.
 The remaining changes are native tests, their CMake registration, and a
 qualification-script correction. Windows Release, Linux Release, and Linux
-ASan/UBSan native unit CI passed at `7e59df5f`. A pristine external-consumer
-compile is still pending.
+ASan/UBSan native unit CI passed at `7e59df5f`. A compile-only generic Engine
+provider check also passed against pristine upstream Jolt `e77f1755` with all
+fork features disabled. The worker then restored the final `7e59df5f` source;
+this compatibility check is not a pristine physical qualification.
 
 The original `Optimize(results)` symbol and `Optimize()` wrapper still select
 256 vertices per group. The new `bool Optimize(results, batch)` accepts only
@@ -51,6 +53,20 @@ edges with 33 update groups at size 512 and 3,810 serial edges with 17 groups
 at size 1024 for the 16K cloth. The larger group reduces the serial edge
 count but leaves fewer parallel groups. The source does not establish an
 optimal batch size outside the measured scene and worker caps.
+
+A final diagnostic profile of the exact `7e59df5f` native and guarded Engine
+candidate compared the earlier 256-group hoist source over the same 40-frame
+16K-cloth W8 case. Edge-scope calls fell from 416,000 to 108,800, nested
+`FinishIteration` worker work from 1,519.3 to 892.8 ms (−41.2%), barrier work
+from 2,815.2 to 2,249.6 ms (−20.1%), and integration work from 344.8 to
+221.0 ms (−35.9%). Edge work fell only 3.6%, from 8,978.9 to 8,654.2 ms.
+Rubber4K retained 108,800 edge-scope calls and its `FinishIteration` work
+rose 3.2%; it still uses 256-group optimization. All 40 final cloth W8 state
+hashes matched both the 600-frame C long-run prefix and the final postguard
+trace; all 40 rubber W8 hashes matched its C long-run prefix. The profile
+includes the pooled-graph, frontier, and lazy-clear changes, so these work
+deltas do not isolate grouping. They are diagnostic nested worker sums, never
+wall-time rankings or a critical-path measurement.
 
 ## Unprofiled timing evidence
 
