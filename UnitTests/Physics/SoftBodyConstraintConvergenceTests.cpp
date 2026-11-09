@@ -629,7 +629,12 @@ TEST_SUITE("SoftBodyConstraintConvergenceTests")
 							Context.SimulateSingleStep();
 							const auto &VertexState = static_cast<SoftBodyMotionProperties *>(Soft.GetMotionProperties())->GetVertex(0);
 							CHECK(!VertexState.mVelocity.IsNaN());
-							CHECK(VertexState.mHasContact);
+							// UpdateSoftBodyState resets mHasContact before publishing the
+							// frame. Verify the actual contact projection geometrically.
+							const RVec3 CenterOfMass = Sphere.GetCenterOfMassPosition();
+							const Vec3 Center(float(CenterOfMass.GetX()), float(CenterOfMass.GetY()), float(CenterOfMass.GetZ()));
+							CHECK((VertexState.mPosition - Center).Length() >= 0.8f - 1.0e-4f);
+							CHECK(VertexState.mPosition.GetX() < -0.1f);
 							if (MotionType == EMotionType::Static)
 								(Relative ? StaticOn : StaticOff) = VertexState.mVelocity;
 							else
