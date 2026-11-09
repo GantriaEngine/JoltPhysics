@@ -92,6 +92,16 @@ bound; nonfinite inputs take the unculled path. The switch defaults off so the
 previous H/I trajectory remains available for bit-exact qualification. The
 face diagnostic row counts skipped triangles. Profile timings with diagnostic
 logging are explanatory only; uninstrumented matched runs decide performance.
+Mode `1` preserved the 26-case trajectory exactly but made the measured 16K
+I run about 3.7 times slower, so it is retained as a rejected performance
+control. Mode `2` tests a cheaper conservative sphere/AABB cube overlap: one
+finite/max-absolute-coordinate scan per integration, expanded sphere bounds
+once per collider, then SIMD float min/max and six comparisons per face.
+The sphere bounds round outward and carry the same 16-epsilon coordinate guard;
+the bound is refreshed whenever a face correction expands vertex coordinates.
+Nonfinite or overflowing bounds disable this cull. Mode `2` is also opt-in and
+requires bit-exact full-state and uninstrumented timing comparisons with mode
+`0` before any performance claim.
 
 `GANTRIA_CONTACT_STAGES=1` on a single 128×128 cloth logs
 `[Physics:ContactStage]` CSV rows at precontact, intermediate contact,

@@ -306,7 +306,7 @@ private:
 	};
 
 	/// Private sphere/triangle geometry diagnostic, with optional velocity impulse response
-	FaceContactStats					ProjectSphereFacePositions(const SoftBodyUpdateContext &inContext, bool inResolveVelocity, bool inCullFaces);
+	FaceContactStats					ProjectSphereFacePositions(const SoftBodyUpdateContext &inContext, bool inResolveVelocity, uint inCullMode);
 
 	/// Private normal-refresh experiment: recompute vertex planes after the structural solve
 	bool								RefreshCollisionPlanes();

@@ -127,13 +127,13 @@ TEST_SUITE("SoftBodyConstraintConvergenceTests")
 
 	struct ScopedFaceAabbCull
 	{
-		explicit ScopedFaceAabbCull(bool inEnabled)
+		explicit ScopedFaceAabbCull(uint inMode)
 		{
 			const char *Previous = std::getenv("GANTRIA_CONTACT_FACE_AABB_CULL");
 			mHadPrevious = Previous != nullptr;
 			if (mHadPrevious)
 				mPrevious = Previous;
-			mSetSucceeded = Set(inEnabled ? "1" : nullptr);
+			mSetSucceeded = Set(inMode == 2 ? "2" : inMode == 1 ? "1" : nullptr);
 		}
 
 		~ScopedFaceAabbCull()
@@ -774,19 +774,20 @@ TEST_SUITE("SoftBodyConstraintConvergenceTests")
 				RVec3(1.6, 1.6, 0.0)         // finite far control
 			})
 			{
-				std::array<Vec3, 6> Unculled, Culled;
+				std::array<Vec3, 6> Unculled;
 				{
-					ScopedFaceAabbCull Cull(false);
+					ScopedFaceAabbCull Cull(0);
 					CHECK(Cull.mSetSucceeded);
 					Unculled = Run(true, true, Order, true, 0.0f, Center);
 				}
+				for (uint CullMode : { 1u, 2u })
 				{
-					ScopedFaceAabbCull Cull(true);
-					CHECK(Cull.mSetSucceeded);
-					Culled = Run(true, true, Order, true, 0.0f, Center);
-				}
+				ScopedFaceAabbCull Cull(CullMode);
+				CHECK(Cull.mSetSucceeded);
+				const auto Culled = Run(true, true, Order, true, 0.0f, Center);
 				for (uint Index = 0; Index < 6; ++Index)
 					CHECK(Culled[Index] == Unculled[Index]);
+				}
 			}
 	}
 }

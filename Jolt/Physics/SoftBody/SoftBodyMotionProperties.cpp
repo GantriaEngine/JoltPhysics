@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <climits>
 #include <cmath>
+#include <limits>
 #include <cstdio>
 #include <cstdlib>
 #ifdef JPH_DEBUG_RENDERER
@@ -913,10 +914,23 @@ static Vec3 GetContactFaceWeights(Vec3Arg inPoint, Vec3Arg inA, Vec3Arg inB, Vec
 	return Vec3(1.0f - V - W, V, W);
 }
 
-SoftBodyMotionProperties::FaceContactStats SoftBodyMotionProperties::ProjectSphereFacePositions(const SoftBodyUpdateContext &inContext, bool inResolveVelocity, bool inCullFaces)
+SoftBodyMotionProperties::FaceContactStats SoftBodyMotionProperties::ProjectSphereFacePositions(const SoftBodyUpdateContext &inContext, bool inResolveVelocity, uint inCullMode)
 {
 	JPH_PROFILE_FUNCTION();
 	FaceContactStats Stats;
+	bool FiniteVertexBounds = inCullMode == 2;
+	float MaxVertexCoordinate = 1.0f;
+	if (FiniteVertexBounds)
+		for (const Vertex &V : mVertices)
+		{
+			const Vec3 Absolute = V.mPosition.Abs();
+			if (!std::isfinite(Absolute.GetX()) || !std::isfinite(Absolute.GetY()) || !std::isfinite(Absolute.GetZ()))
+			{
+				FiniteVertexBounds = false;
+				break; // Preserve the unculled path for every face.
+			}
+			MaxVertexCoordinate = max(MaxVertexCoordinate, max(Absolute.GetX(), max(Absolute.GetY(), Absolute.GetZ())));
+		}
 	for (const CollidingShape &Shape : mCollidingShapes)
 	{
 		if (Shape.mMotionType == EMotionType::Dynamic || Shape.mSoftBodyInvMassScale <= 0.0f)
@@ -936,12 +950,36 @@ SoftBodyMotionProperties::FaceContactStats SoftBodyMotionProperties::ProjectSphe
 			const SphereShape *Sphere = static_cast<const SphereShape *>(Leaf.mShape.GetPtr());
 			const Vec3 Center = Leaf.mTransform.GetTranslation();
 			const float Radius = Sphere->GetRadius() * Leaf.mScale.Abs().GetX() + mVertexRadius;
+			bool FastCull = FiniteVertexBounds && std::isfinite(Center.GetX()) &&
+				std::isfinite(Center.GetY()) && std::isfinite(Center.GetZ()) && std::isfinite(Radius);
+			Vec3 LowerBound, UpperBound;
+			const auto RefreshFastBounds = [&]()
+			{
+				const Vec3 AbsoluteCenter = Center.Abs();
+				const float Scale = max(MaxVertexCoordinate, max(Radius,
+					max(AbsoluteCenter.GetX(), max(AbsoluteCenter.GetY(), AbsoluteCenter.GetZ()))));
+				const float ExpandedRadius = Radius + 16.0f * FLT_EPSILON * Scale;
+				const float NegativeInfinity = -std::numeric_limits<float>::infinity();
+				const float PositiveInfinity = std::numeric_limits<float>::infinity();
+				LowerBound = Vec3(std::nextafter(Center.GetX() - ExpandedRadius, NegativeInfinity),
+					std::nextafter(Center.GetY() - ExpandedRadius, NegativeInfinity),
+					std::nextafter(Center.GetZ() - ExpandedRadius, NegativeInfinity));
+				UpperBound = Vec3(std::nextafter(Center.GetX() + ExpandedRadius, PositiveInfinity),
+					std::nextafter(Center.GetY() + ExpandedRadius, PositiveInfinity),
+					std::nextafter(Center.GetZ() + ExpandedRadius, PositiveInfinity));
+				FastCull = std::isfinite(LowerBound.GetX()) && std::isfinite(LowerBound.GetY()) && std::isfinite(LowerBound.GetZ()) &&
+					std::isfinite(UpperBound.GetX()) && std::isfinite(UpperBound.GetY()) && std::isfinite(UpperBound.GetZ());
+			};
+			if (FastCull)
+				RefreshFastBounds();
+			if (inCullMode == 2 && !FastCull)
+				FiniteVertexBounds = false;
 			for (const Face &Triangle : mSettings->mFaces)
 			{
 				Vertex &A = mVertices[Triangle.mVertex[0]];
 				Vertex &B = mVertices[Triangle.mVertex[1]];
 				Vertex &C = mVertices[Triangle.mVertex[2]];
-				if (inCullFaces)
+				if (inCullMode == 1)
 				{
 					// The triangle is contained by this AABB, so its closest
 					// distance cannot be smaller than the box distance. Do the
@@ -973,6 +1011,18 @@ SoftBodyMotionProperties::FaceContactStats SoftBodyMotionProperties::ProjectSphe
 						}
 					}
 				}
+				else if (FastCull)
+				{
+					const Vec3 FaceMin = Vec3::sMin(Vec3::sMin(A.mPosition, B.mPosition), C.mPosition);
+					const Vec3 FaceMax = Vec3::sMax(Vec3::sMax(A.mPosition, B.mPosition), C.mPosition);
+					if (FaceMax.GetX() < LowerBound.GetX() || FaceMin.GetX() > UpperBound.GetX() ||
+						FaceMax.GetY() < LowerBound.GetY() || FaceMin.GetY() > UpperBound.GetY() ||
+						FaceMax.GetZ() < LowerBound.GetZ() || FaceMin.GetZ() > UpperBound.GetZ())
+					{
+						++Stats.CulledFaces;
+						continue;
+					}
+				}
 				const Vec3 FaceNormal = (B.mPosition - A.mPosition).Cross(C.mPosition - A.mPosition);
 				const float FaceNormalLengthSq = FaceNormal.LengthSq();
 				if (FaceNormalLengthSq <= 1.0e-16f)
@@ -995,6 +1045,30 @@ SoftBodyMotionProperties::FaceContactStats SoftBodyMotionProperties::ProjectSphe
 				A.mPosition += Shape.mSoftBodyInvMassScale * A.mInvMass * WA * Correction;
 				B.mPosition += Shape.mSoftBodyInvMassScale * B.mInvMass * WB * Correction;
 				C.mPosition += Shape.mSoftBodyInvMassScale * C.mInvMass * WC * Correction;
+				if (FastCull)
+				{
+					bool BoundsGrow = false;
+					for (const Vertex *Changed : {&A, &B, &C})
+					{
+						const Vec3 Absolute = Changed->mPosition.Abs();
+						if (!std::isfinite(Absolute.GetX()) || !std::isfinite(Absolute.GetY()) || !std::isfinite(Absolute.GetZ()))
+						{
+							FastCull = false;
+							FiniteVertexBounds = false;
+							break;
+						}
+						const float NewMaximum = max(Absolute.GetX(), max(Absolute.GetY(), Absolute.GetZ()));
+						if (NewMaximum > MaxVertexCoordinate)
+						{
+							MaxVertexCoordinate = NewMaximum;
+							BoundsGrow = true;
+						}
+					}
+					if (FastCull && BoundsGrow)
+						RefreshFastBounds();
+					if (!FastCull)
+						FiniteVertexBounds = false;
+				}
 				++Stats.Corrections;
 				Stats.MaxPenetration = max(Stats.MaxPenetration, Radius - Distance);
 				if (inResolveVelocity)
@@ -1579,7 +1653,9 @@ SoftBodyMotionProperties::EStatus SoftBodyMotionProperties::ParallelApplyConstra
 				const char *FaceFlag = std::getenv("GANTRIA_CONTACT_FACE_DIAGNOSTIC");
 				const bool RecordFaces = (OrderH || OrderI) && FaceFlag != nullptr && FaceFlag[0] == '1' && FaceFlag[1] == '\0';
 				const char *FaceCullFlag = std::getenv("GANTRIA_CONTACT_FACE_AABB_CULL");
-				const bool CullFaces = FaceCullFlag != nullptr && FaceCullFlag[0] == '1' && FaceCullFlag[1] == '\0';
+				const uint CullMode = FaceCullFlag != nullptr &&
+					(FaceCullFlag[0] == '1' || FaceCullFlag[0] == '2') && FaceCullFlag[1] == '\0' ?
+					uint(FaceCullFlag[0] - '0') : 0;
 				const uint64 StageIntegration = RecordStages || RecordFaces ? mContactStageIntegrationIndex++ : 0;
 				const uint32 StageBodyID = RecordStages || RecordFaces ? ioContext.mBody->GetID().GetIndexAndSequenceNumber() : 0;
 				const char *StageMode = OrderB ? "B" : OrderC ? "C" : OrderD ? "D" : OrderE ? "E" : OrderF ? "F" : OrderH ? "H" : OrderI ? "I" : "A";
@@ -1689,7 +1765,7 @@ SoftBodyMotionProperties::EStatus SoftBodyMotionProperties::ParallelApplyConstra
 				if (OrderH || OrderI)
 				{
 				Array<Vec3> BeforeFace = SavePositions();
-				const FaceContactStats FaceStats = ProjectSphereFacePositions(ioContext, OrderI, CullFaces);
+				const FaceContactStats FaceStats = ProjectSphereFacePositions(ioContext, OrderI, CullMode);
 				LogStage("FaceContact", &BeforeFace);
 				if (RecordFaces)
 				{
