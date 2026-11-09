@@ -52,5 +52,5 @@ if Args.mode == 'Sanitizers':
                 '-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined']
 Run('Configure', Options)
 Run('Build', ['cmake', '--build', str(Build), '--parallel', '2', '--target', 'UnitTests'])
-Run('Tests', ['ctest', '--test-dir', str(Build), '--output-on-failure',
+Run('Tests', ['ctest', '--test-dir', str(Build), '--verbose', '--output-on-failure',
               '--output-junit', str(Evidence / 'JUnit.xml'), '--timeout', '600'])
