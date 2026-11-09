@@ -809,19 +809,22 @@ void SoftBodyMotionProperties::ApplyLRAConstraints(uint inStartIndex, uint inEnd
 	}
 }
 
-void SoftBodyMotionProperties::ProjectCollisionPositionsOnly()
+bool SoftBodyMotionProperties::ProjectCollisionPositionsOnly()
 {
+	bool Projected = false;
 	for (Vertex &VertexState : mVertices)
 		if (VertexState.mInvMass > 0.0f && VertexState.mCollidingShapeIndex >= 0)
 		{
 			const float ProjectedDistance = -VertexState.mCollisionPlane.SignedDistance(VertexState.mPosition) + mVertexRadius;
 			if (ProjectedDistance > 0.0f)
 			{
+				Projected = true;
 				VertexState.mHasContact = true;
 				RequestContactCallback();
 				VertexState.mPosition += VertexState.mCollisionPlane.GetNormal() * ProjectedDistance;
 			}
 		}
+	return Projected;
 }
 
 void SoftBodyMotionProperties::ApplyCollisionConstraintsAndUpdateVelocities(const SoftBodyUpdateContext &inContext)
@@ -1228,20 +1231,29 @@ SoftBodyMotionProperties::EStatus SoftBodyMotionProperties::ParallelApplyConstra
 				const char *ContactOrder = std::getenv("GANTRIA_CONTACT_ORDER");
 				const bool OrderB = ContactOrder != nullptr && ContactOrder[0] == 'B' && ContactOrder[1] == '\0';
 				const bool OrderC = ContactOrder != nullptr && ContactOrder[0] == 'C' && ContactOrder[1] == '\0';
+				bool ContactActive = false;
+				if (OrderB)
+					for (const Vertex &VertexState : mVertices)
+						if (VertexState.mInvMass > 0.0f && VertexState.mCollidingShapeIndex >= 0
+							&& -VertexState.mCollisionPlane.SignedDistance(VertexState.mPosition) + mVertexRadius > 0.0f)
+						{
+							ContactActive = true;
+							break;
+						}
 				if (OrderC)
 				{
 					// Alternate one contact projection with one more complete
 					// structural pass. Retained Q2 multipliers continue from sweep 2.
-					ProjectCollisionPositionsOnly();
-					for (uint Group = 0; Group < mSettings->mUpdateGroups.size(); ++Group)
-						ProcessGroup(ioContext, Group);
+					if (ProjectCollisionPositionsOnly())
+						for (uint Group = 0; Group < mSettings->mUpdateGroups.size(); ++Group)
+							ProcessGroup(ioContext, Group);
 				}
 				ApplyCollisionConstraintsAndUpdateVelocities(ioContext);
 
 				// Private contact-order experiment B: relax the structure after the
 				// existing contact solve. Velocity was reconstructed above, so this
 				// mode is a diagnostic of ordering, not an accepted physical update.
-				if (OrderB)
+				if (OrderB && ContactActive)
 					for (uint Group = 0; Group < mSettings->mUpdateGroups.size(); ++Group)
 						ProcessGroup(ioContext, Group);
 

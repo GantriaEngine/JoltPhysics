@@ -287,7 +287,7 @@ private:
 	void								ApplyCollisionConstraintsAndUpdateVelocities(const SoftBodyUpdateContext &inContext);
 
 	/// Private alternating-order experiment: position projection without velocity impulses
-	void								ProjectCollisionPositionsOnly();
+	bool								ProjectCollisionPositionsOnly();
 
 	/// Update the state of the soft body (position, velocity, bounds)
 	void								UpdateSoftBodyState(SoftBodyUpdateContext &ioContext, const PhysicsSettings &inPhysicsSettings);
