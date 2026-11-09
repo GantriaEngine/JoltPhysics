@@ -485,8 +485,14 @@ void SoftBodyMotionProperties::ApplyDihedralBendConstraints(const SoftBodyUpdate
 void SoftBodyMotionProperties::ApplyVolumeConstraints(const SoftBodyUpdateContext &inContext, uint inStartIndex, uint inEndIndex)
 {
 	JPH_PROFILE_FUNCTION();
+	if (inStartIndex == inEndIndex)
+		return;
 
 	float inv_dt_sq = 1.0f / Square(inContext.mSubStepDeltaTime);
+	const bool RetainLambda = mNumConstraintIterations > 1;
+	// ParallelApplyConstraints advances the sweep only after every group completes.
+	const bool FirstSweep = RetainLambda && inContext.mConstraintSweep.load(memory_order_relaxed) == 0;
+	const bool AccumulateDelta = mVelocityReconstruction == ESoftBodyVelocityReconstruction::ConstraintDelta;
 
 	// Satisfy volume constraints
 	for (const Volume *v = mSettings->mVolumeConstraints.data() + inStartIndex, *v_end = mSettings->mVolumeConstraints.data() + inEndIndex; v < v_end; ++v)
@@ -524,10 +530,10 @@ void SoftBodyMotionProperties::ApplyVolumeConstraints(const SoftBodyUpdateContex
 		if (denom < 1.0e-12f)
 			continue;
 		float minus_lambda = c / denom;
-		if (mNumConstraintIterations > 1)
+		if (RetainLambda)
 		{
 			float &lambda = mVolumeLambdas[v - mSettings->mVolumeConstraints.data()];
-			if (inContext.mConstraintSweep.load(memory_order_relaxed) == 0)
+			if (FirstSweep)
 				lambda = -minus_lambda;
 			else
 			{
@@ -542,7 +548,7 @@ void SoftBodyMotionProperties::ApplyVolumeConstraints(const SoftBodyUpdateContex
 		v2.mPosition = x2 - minus_lambda * w2 * d2c;
 		v3.mPosition = x3 - minus_lambda * w3 * d3c;
 		v4.mPosition = x4 - minus_lambda * w4 * d4c;
-		if (mVelocityReconstruction == ESoftBodyVelocityReconstruction::ConstraintDelta)
+		if (AccumulateDelta)
 		{
 			v1.mConstraintDelta -= minus_lambda * w1 * d1c;
 			v2.mConstraintDelta -= minus_lambda * w2 * d2c;
@@ -630,8 +636,14 @@ void SoftBodyMotionProperties::ApplySkinConstraints(const SoftBodyUpdateContext 
 void SoftBodyMotionProperties::ApplyEdgeConstraints(const SoftBodyUpdateContext &inContext, uint inStartIndex, uint inEndIndex)
 {
 	JPH_PROFILE_FUNCTION();
+	if (inStartIndex == inEndIndex)
+		return;
 
 	float inv_dt_sq = 1.0f / Square(inContext.mSubStepDeltaTime);
+	const bool RetainLambda = mNumConstraintIterations > 1;
+	// ParallelApplyConstraints advances the sweep only after every group completes.
+	const bool FirstSweep = RetainLambda && inContext.mConstraintSweep.load(memory_order_relaxed) == 0;
+	const bool AccumulateDelta = mVelocityReconstruction == ESoftBodyVelocityReconstruction::ConstraintDelta;
 
 	// Satisfy edge constraints
 	for (const Edge *e = mSettings->mEdgeConstraints.data() + inStartIndex, *e_end = mSettings->mEdgeConstraints.data() + inEndIndex; e < e_end; ++e)
@@ -652,12 +664,12 @@ void SoftBodyMotionProperties::ApplyEdgeConstraints(const SoftBodyUpdateContext 
 		if (denom < 1.0e-12f)
 			continue;
 		Vec3 correction;
-		if (mNumConstraintIterations == 1)
+		if (!RetainLambda)
 			correction = delta * (length - e->mRestLength) / denom;
 		else
 		{
 			float &lambda = mEdgeLambdas[e - mSettings->mEdgeConstraints.data()];
-			if (inContext.mConstraintSweep.load(memory_order_relaxed) == 0)
+			if (FirstSweep)
 			{
 				correction = delta * (length - e->mRestLength) / denom;
 				lambda = -(length - e->mRestLength) /
@@ -674,7 +686,7 @@ void SoftBodyMotionProperties::ApplyEdgeConstraints(const SoftBodyUpdateContext 
 		}
 		v0.mPosition = x0 + v0.mInvMass * correction;
 		v1.mPosition = x1 - v1.mInvMass * correction;
-		if (mVelocityReconstruction == ESoftBodyVelocityReconstruction::ConstraintDelta)
+		if (AccumulateDelta)
 		{
 			v0.mConstraintDelta += v0.mInvMass * correction;
 			v1.mConstraintDelta -= v1.mInvMass * correction;

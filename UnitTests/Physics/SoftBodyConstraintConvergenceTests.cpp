@@ -212,4 +212,48 @@ TEST_SUITE("SoftBodyConstraintConvergenceTests")
 			CHECK_APPROX_EQUAL(a->GetVertex(i).mVelocity, b->GetVertex(i).mVelocity, 1.0e-5f);
 		}
 	}
+
+	TEST_CASE("TestConnectedClothSweepsMatchAcrossWorkers")
+	{
+		PhysicsTestContext Serial(1.0f / 60.0f, 1, 1);
+		PhysicsTestContext Parallel(1.0f / 60.0f, 1, 4);
+		Serial.ZeroGravity();
+		Parallel.ZeroGravity();
+		Ref<SoftBodySharedSettings> Shared = new SoftBodySharedSettings;
+		constexpr uint Resolution = 32;
+		for (uint Y = 0; Y < Resolution; ++Y)
+			for (uint X = 0; X < Resolution; ++X)
+				Shared->mVertices.push_back(SoftBodySharedSettings::Vertex(Float3(float(X), float(Y), 0.0f), Float3(0, 0, 0), Y == 0 ? 0.0f : 1.0f));
+		for (uint Y = 0; Y < Resolution; ++Y)
+			for (uint X = 0; X < Resolution; ++X)
+			{
+				const uint Index = Y * Resolution + X;
+				if (X + 1 < Resolution)
+					Shared->mEdgeConstraints.emplace_back(Index, Index + 1, 0.001f);
+				if (Y + 1 < Resolution)
+					Shared->mEdgeConstraints.emplace_back(Index, Index + Resolution, 0.001f);
+				if (X + 1 < Resolution && Y + 1 < Resolution)
+					Shared->mEdgeConstraints.emplace_back(Index, Index + Resolution + 1, 0.001f);
+			}
+		Shared->CalculateEdgeLengths();
+		Shared->Optimize();
+		CHECK(Shared->mUpdateGroups.size() > 2);
+		Body &SerialBody = CreateSoft(Serial, Shared, 2);
+		Body &ParallelBody = CreateSoft(Parallel, Shared, 2);
+		auto *SerialMotion = static_cast<SoftBodyMotionProperties *>(SerialBody.GetMotionProperties());
+		auto *ParallelMotion = static_cast<SoftBodyMotionProperties *>(ParallelBody.GetMotionProperties());
+		const uint Disturbed = 12 * Resolution + 12;
+		SerialMotion->GetVertex(Disturbed).mPosition += Vec3(0.25f, 0.1f, 0.0f);
+		ParallelMotion->GetVertex(Disturbed).mPosition += Vec3(0.25f, 0.1f, 0.0f);
+		for (uint Frame = 0; Frame < 3; ++Frame)
+		{
+			Serial.SimulateSingleStep();
+			Parallel.SimulateSingleStep();
+		}
+		for (uint Index = 0; Index < Shared->mVertices.size(); ++Index)
+		{
+			CHECK_APPROX_EQUAL(SerialMotion->GetVertex(Index).mPosition, ParallelMotion->GetVertex(Index).mPosition, 1.0e-5f);
+			CHECK_APPROX_EQUAL(SerialMotion->GetVertex(Index).mVelocity, ParallelMotion->GetVertex(Index).mVelocity, 1.0e-5f);
+		}
+	}
 }
