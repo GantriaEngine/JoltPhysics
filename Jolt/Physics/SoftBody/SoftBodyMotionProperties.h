@@ -295,7 +295,9 @@ private:
 	struct FaceContactStats
 	{
 		uint							Corrections = 0;
-		Vec3							ClothVelocityImpulse = Vec3::sZero();
+		Vec3							ContactImpulse = Vec3::sZero();
+		Vec3							MovableClothMomentumDelta = Vec3::sZero();
+		Vec3							ComputedPinReaction = Vec3::sZero();
 		double							KinematicVelocityWork = 0.0;
 		double							ClothKineticDelta = 0.0;
 		float							MaxPenetration = 0.0f;

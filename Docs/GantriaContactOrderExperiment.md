@@ -66,9 +66,12 @@ I adds velocity response to that same geometry probe. For barycentric weights
 `b`, its inverse effective mass is `Σ(b²/m)`. The normal velocity impulse is
 unilateral; the friction limit uses `μ max(J_normal, depth/(W dt))`, where the
 second term is the position projection's impulse-equivalent normal support.
-Each vertex receives its share `inverse_mass × b × J`. The computed opposite
-reaction is logged for static/kinematic bodies but is not applied to their
-prescribed motion. The logger also sums the actual cloth kinetic-energy change
+Each vertex receives its share `inverse_mass × b × J`. If a face includes a
+pin, movable-vertex momentum changes by only the sum of its barycentric shares
+of `J`; the pinned share is a computed anchor reaction. The logger separates
+contact impulse, actual movable-cloth momentum change, computed anchor reaction,
+and the opposite prescribed-body reaction. The latter is not applied to rigid
+motion. The logger also sums the actual cloth kinetic-energy change
 and `J·v_surface` for kinematic contacts. This closes only the velocity impulse
 account; geometry projection, elastic-energy change, and externally imposed
 static pose jumps still require separate accounting. Exact center-on-face

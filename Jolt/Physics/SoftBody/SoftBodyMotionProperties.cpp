@@ -987,7 +987,13 @@ SoftBodyMotionProperties::FaceContactStats SoftBodyMotionProperties::ProjectSphe
 					(A.mInvMass > 0.0f ? 0.5 * double(A.mVelocity.LengthSq()) / A.mInvMass : 0.0) +
 					(B.mInvMass > 0.0f ? 0.5 * double(B.mVelocity.LengthSq()) / B.mInvMass : 0.0) +
 					(C.mInvMass > 0.0f ? 0.5 * double(C.mVelocity.LengthSq()) / C.mInvMass : 0.0);
-				Stats.ClothVelocityImpulse += Impulse;
+				const float MovableWeight = (A.mInvMass > 0.0f ? WA : 0.0f) +
+					(B.mInvMass > 0.0f ? WB : 0.0f) + (C.mInvMass > 0.0f ? WC : 0.0f);
+				const float PinnedWeight = (A.mInvMass <= 0.0f ? WA : 0.0f) +
+					(B.mInvMass <= 0.0f ? WB : 0.0f) + (C.mInvMass <= 0.0f ? WC : 0.0f);
+				Stats.ContactImpulse += Impulse;
+				Stats.MovableClothMomentumDelta += MovableWeight * Impulse;
+				Stats.ComputedPinReaction -= PinnedWeight * Impulse;
 				Stats.ClothKineticDelta += KineticAfter - KineticBefore;
 				if (Shape.mMotionType == EMotionType::Kinematic)
 					Stats.KinematicVelocityWork += double(Impulse.Dot(SurfaceVelocity));
@@ -1644,11 +1650,13 @@ SoftBodyMotionProperties::EStatus SoftBodyMotionProperties::ParallelApplyConstra
 				if (RecordFaces)
 				{
 					if (OrderI)
-						std::fprintf(stdout, "[Physics:FaceContact] integration=%llu body=%u mode=I corrections=%u max_penetration_m=%.9g cloth_impulse_local_ns=%.9g,%.9g,%.9g computed_prescribed_reaction_local_ns=%.9g,%.9g,%.9g kinematic_velocity_work_j=%.9g cloth_velocity_kinetic_delta_j=%.9g\n",
+						std::fprintf(stdout, "[Physics:FaceContact] integration=%llu body=%u mode=I corrections=%u max_penetration_m=%.9g contact_impulse_local_ns=%.9g,%.9g,%.9g movable_cloth_momentum_delta_local_ns=%.9g,%.9g,%.9g computed_pin_reaction_local_ns=%.9g,%.9g,%.9g computed_prescribed_reaction_local_ns=%.9g,%.9g,%.9g kinematic_velocity_work_j=%.9g cloth_velocity_kinetic_delta_j=%.9g\n",
 							static_cast<unsigned long long>(StageIntegration), StageBodyID,
 							FaceStats.Corrections, FaceStats.MaxPenetration,
-							FaceStats.ClothVelocityImpulse.GetX(), FaceStats.ClothVelocityImpulse.GetY(), FaceStats.ClothVelocityImpulse.GetZ(),
-							-FaceStats.ClothVelocityImpulse.GetX(), -FaceStats.ClothVelocityImpulse.GetY(), -FaceStats.ClothVelocityImpulse.GetZ(),
+							FaceStats.ContactImpulse.GetX(), FaceStats.ContactImpulse.GetY(), FaceStats.ContactImpulse.GetZ(),
+							FaceStats.MovableClothMomentumDelta.GetX(), FaceStats.MovableClothMomentumDelta.GetY(), FaceStats.MovableClothMomentumDelta.GetZ(),
+							FaceStats.ComputedPinReaction.GetX(), FaceStats.ComputedPinReaction.GetY(), FaceStats.ComputedPinReaction.GetZ(),
+							-FaceStats.ContactImpulse.GetX(), -FaceStats.ContactImpulse.GetY(), -FaceStats.ContactImpulse.GetZ(),
 							FaceStats.KinematicVelocityWork, FaceStats.ClothKineticDelta);
 					else
 						std::fprintf(stdout, "[Physics:FaceContact] integration=%llu body=%u mode=H corrections=%u max_penetration_m=%.9g velocity_response=INCOMPLETE rigid_reaction=INCOMPLETE\n",
