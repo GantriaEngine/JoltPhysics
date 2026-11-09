@@ -1058,12 +1058,17 @@ void SoftBodyMotionProperties::ApplyCollisionConstraintsAndUpdateVelocities(cons
 							Vec3 R2 = v.mPosition - cs.mCenterOfMassTransform.GetTranslation();
 							Vec3 SurfaceVelocity = cs.GetPointVelocity(R2);
 							Vec3 RelativeVelocity = v.mVelocity - SurfaceVelocity;
-							Vec3 NormalVelocity = contact_normal * contact_normal.Dot(RelativeVelocity);
+							float NormalSpeed = contact_normal.Dot(RelativeVelocity);
+							Vec3 NormalVelocity = contact_normal * NormalSpeed;
 							Vec3 TangentialVelocity = RelativeVelocity - NormalVelocity;
 							float TangentialSpeed = TangentialVelocity.Length();
 							if (TangentialSpeed > 0.0f)
 								v.mVelocity -= TangentialVelocity * min(cs.mFriction * max(projected_distance, retained_contact_distance) / (TangentialSpeed * dt), 1.0f);
-							v.mVelocity -= NormalVelocity;
+							// Unilateral contact cancels only approach. Removing an
+							// outgoing relative normal velocity would make the cloth
+							// adhere to a surface moving away from it.
+							if (NormalSpeed < 0.0f)
+								v.mVelocity -= NormalVelocity;
 							float PreviousNormalSpeed = (prev_v - SurfaceVelocity).Dot(contact_normal);
 							if (PreviousNormalSpeed < restitution_threshold)
 								v.mVelocity -= cs.mRestitution * PreviousNormalSpeed * contact_normal;

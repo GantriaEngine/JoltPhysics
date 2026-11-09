@@ -601,39 +601,46 @@ TEST_SUITE("SoftBodyConstraintConvergenceTests")
 		{
 			ScopedContactOrder OrderEnvironment(*Order != '\0' ? Order : nullptr);
 			CHECK(OrderEnvironment.mSetSucceeded);
-			Vec3 StaticOff, StaticOn, KinematicOff, KinematicOn;
-			for (EMotionType MotionType : { EMotionType::Static, EMotionType::Kinematic })
-				for (bool Relative : { false, true })
-				{
-				ScopedKinematicRelativeContact Environment(Relative);
-				CHECK(Environment.mSetSucceeded);
-				PhysicsTestContext Context;
-				Context.ZeroGravity();
-				BodyCreationSettings SphereSettings(new SphereShape(0.75f), RVec3(0.6, 0, 0), Quat::sIdentity(), MotionType,
-					MotionType == EMotionType::Static ? Layers::NON_MOVING : Layers::MOVING);
-				Body &Sphere = Context.CreateBody(SphereSettings, MotionType == EMotionType::Static ? EActivation::DontActivate : EActivation::Activate);
-				if (MotionType == EMotionType::Kinematic)
-					Sphere.SetLinearVelocity(Vec3(-1.0f, 0.0f, 0.0f));
-				SoftBodyCreationSettings SoftSettings(Shared, RVec3::sZero(), Quat::sIdentity(), Layers::MOVING);
-				SoftSettings.mVelocityReconstruction = ESoftBodyVelocityReconstruction::ConstraintDelta;
-				SoftSettings.mNumIterations = 1;
-				SoftSettings.mNumConstraintIterations = 2;
-				SoftSettings.mLinearDamping = 0.0f;
-				SoftSettings.mAllowSleeping = false;
-				SoftSettings.mUpdatePosition = false;
-				SoftSettings.mVertexRadius = 0.05f;
-				Body &Soft = *Context.GetBodyInterface().CreateSoftBody(SoftSettings);
-				Context.GetBodyInterface().AddBody(Soft.GetID(), EActivation::Activate);
-				Context.SimulateSingleStep();
-				Vec3 Velocity = static_cast<SoftBodyMotionProperties *>(Soft.GetMotionProperties())->GetVertex(0).mVelocity;
-				CHECK(!Velocity.IsNaN());
-				if (MotionType == EMotionType::Static)
-					(Relative ? StaticOn : StaticOff) = Velocity;
-				else
-					(Relative ? KinematicOn : KinematicOff) = Velocity;
-				}
-			CHECK(StaticOn == StaticOff);
-			CHECK(KinematicOn.GetX() < KinematicOff.GetX() - 0.1f);
+			for (float SurfaceSpeed : { -1.0f, 1.0f })
+			{
+					Vec3 StaticOff, StaticOn, KinematicOff, KinematicOn;
+					for (EMotionType MotionType : { EMotionType::Static, EMotionType::Kinematic })
+						for (bool Relative : { false, true })
+						{
+							ScopedKinematicRelativeContact Environment(Relative);
+							CHECK(Environment.mSetSucceeded);
+							PhysicsTestContext Context;
+							Context.ZeroGravity();
+							BodyCreationSettings SphereSettings(new SphereShape(0.75f), RVec3(0.6, 0, 0), Quat::sIdentity(), MotionType,
+								MotionType == EMotionType::Static ? Layers::NON_MOVING : Layers::MOVING);
+							Body &Sphere = Context.CreateBody(SphereSettings, MotionType == EMotionType::Static ? EActivation::DontActivate : EActivation::Activate);
+							if (MotionType == EMotionType::Kinematic)
+								Sphere.SetLinearVelocity(Vec3(SurfaceSpeed, 0.0f, 0.0f));
+							SoftBodyCreationSettings SoftSettings(Shared, RVec3::sZero(), Quat::sIdentity(), Layers::MOVING);
+							SoftSettings.mVelocityReconstruction = ESoftBodyVelocityReconstruction::ConstraintDelta;
+							SoftSettings.mNumIterations = 1;
+							SoftSettings.mNumConstraintIterations = 2;
+							SoftSettings.mLinearDamping = 0.0f;
+							SoftSettings.mAllowSleeping = false;
+							SoftSettings.mUpdatePosition = false;
+							SoftSettings.mVertexRadius = 0.05f;
+							Body &Soft = *Context.GetBodyInterface().CreateSoftBody(SoftSettings);
+							Context.GetBodyInterface().AddBody(Soft.GetID(), EActivation::Activate);
+							Context.SimulateSingleStep();
+							const auto &VertexState = static_cast<SoftBodyMotionProperties *>(Soft.GetMotionProperties())->GetVertex(0);
+							CHECK(!VertexState.mVelocity.IsNaN());
+							CHECK(VertexState.mHasContact);
+							if (MotionType == EMotionType::Static)
+								(Relative ? StaticOn : StaticOff) = VertexState.mVelocity;
+							else
+								(Relative ? KinematicOn : KinematicOff) = VertexState.mVelocity;
+						}
+					CHECK(StaticOn == StaticOff);
+					if (SurfaceSpeed < 0.0f)
+						CHECK(KinematicOn.GetX() < KinematicOff.GetX() - 0.1f);
+					else
+						CHECK_APPROX_EQUAL(KinematicOn, KinematicOff, 1.0e-5f);
+			}
 		}
 	}
 }

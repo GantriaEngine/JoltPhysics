@@ -18,7 +18,9 @@ authored material, and Engine public API are separate from this source.
 switch, combinable with A or F. On kinematic contacts only, it calculates
 friction, normal response, and restitution from cloth velocity relative to the
 body's linear and angular point velocity, then applies the resulting velocity
-change to the cloth. Static contacts retain the original arithmetic and dynamic
+change to the cloth. Its normal response cancels approaching relative speed
+only; a separating cloth vertex does not adhere to a receding surface. Static
+contacts retain the original arithmetic and dynamic
 contacts retain their original coupled impulse path. Without the switch, the
 qualified default response remains unchanged. The switch does not change
 position projection or infer motion from teleported poses.
@@ -43,6 +45,13 @@ F repairs this specific missing-support path for static/kinematic contacts,
 but its multiplier/friction mapping remains experimental. It does not make
 static pose jumps have a measurable actuator work term or solve the planar
 deformation by itself. Full trace and contact/momentum gates decide acceptance.
+F's intermediate positional contact projections do not enter the
+`ConstraintDelta` velocity numerator. This preserves the baseline policy of
+resolving contact velocity in the final response, while structural corrections
+do enter that numerator. For a fixed per-vertex plane, the retained contact
+projection is normal to the plane. G's unilateral response can preserve
+separating relative speed, so F+G full-velocity traces must be qualified before
+any physical adoption; these rows do not establish energy closure.
 
 `GANTRIA_CONTACT_STAGES=1` on a single 128×128 cloth logs
 `[Physics:ContactStage]` CSV rows at precontact, intermediate contact,
