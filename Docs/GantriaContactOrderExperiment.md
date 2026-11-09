@@ -13,6 +13,7 @@ authored material, and Engine public API are separate from this source.
 | `D` | Unilateral hard-contact multiplier projection alternating with complete structural passes, then original final contact/velocity update. The multiplier lives for one temporal integration. Default 4 passes; `GANTRIA_CONTACT_PASSES=1..4` allows matched C/D pass counts. Dynamic rigid contacts retain A handling; D does not pretend to apply a coupled rigid position correction. |
 | `E` | Refresh vertex contact planes from post-structure positions before A's final contact update. Existing colliding shape transforms remain fixed for that soft update. Any CCD marker leaves the old plane path intact. No out-of-plane tie-break is imposed. |
 | `F` | D's unilateral contact/structure alternations, followed by a final multiplier projection. The one final velocity update treats retained normal support as active contact and uses its equivalent normal correction distance for the existing friction cap. `GANTRIA_CONTACT_PASSES=1..4` allows F1/F4 controls. Dynamic contacts retain A. |
+| `H` | After A's vertex response, project closest cloth triangle points out of collected static/kinematic sphere leaves using barycentric inverse-mass weights. Dynamic sphere contacts remain A. H is a geometry-only diagnostic: face correction does not reconstruct cloth velocity, apply face friction, or react on the rigid body. |
 
 `GANTRIA_CONTACT_KINEMATIC_RELATIVE=1` is a separate G velocity-response
 switch, combinable with A or F. On kinematic contacts only, it calculates
@@ -52,6 +53,14 @@ do enter that numerator. For a fixed per-vertex plane, the retained contact
 projection is normal to the plane. G's unilateral response can preserve
 separating relative speed, so F+G full-velocity traces must be qualified before
 any physical adoption; these rows do not establish energy closure.
+H tests the geometric gap in vertex-only sphere contact. It uses the face's
+oriented normal when the sphere center is exactly on its closest face point.
+That is an **explicit winding-based side policy** under exact coplanar
+symmetry, not a derived double-sided physical solution. H is not a qualified
+solver fix. `GANTRIA_CONTACT_FACE_DIAGNOSTIC=1` emits correction counts; the
+log marks face velocity response and rigid reaction incomplete. It must be
+compared with the independent full trace's triangle penetration, edge strain,
+and energy gates before drawing any conclusion about geometry.
 
 `GANTRIA_CONTACT_STAGES=1` on a single 128×128 cloth logs
 `[Physics:ContactStage]` CSV rows at precontact, intermediate contact,

@@ -292,6 +292,9 @@ private:
 	/// Private unilateral hard-contact XPBD multiplier experiment (static/kinematic only)
 	bool								ProjectCollisionPositionsWithLambda(Array<float> &ioLambdas);
 
+	/// Private sphere/triangle geometry diagnostic; does not update velocity or rigid momentum
+	uint								ProjectSphereFacePositions();
+
 	/// Private normal-refresh experiment: recompute vertex planes after the structural solve
 	bool								RefreshCollisionPlanes();
 

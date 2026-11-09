@@ -10,6 +10,7 @@
 #include <Jolt/Physics/SoftBody/SoftBodyManifold.h>
 #include <Jolt/Physics/Collision/CollideSoftBodyVertexIterator.h>
 #include <Jolt/Physics/Collision/SimShapeFilterWrapper.h>
+#include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/Physics/Body/BodyManager.h>
 #include <Jolt/Core/ScopeExit.h>
@@ -870,6 +871,95 @@ bool SoftBodyMotionProperties::ProjectCollisionPositionsWithLambda(Array<float> 
 	return Changed;
 }
 
+// Barycentric coordinates of the triangle point nearest to a sphere center.
+// A degenerate face is rejected by the caller before this calculation.
+static Vec3 GetContactFaceWeights(Vec3Arg inPoint, Vec3Arg inA, Vec3Arg inB, Vec3Arg inC)
+{
+	const Vec3 AB = inB - inA, AC = inC - inA, AP = inPoint - inA;
+	const float D1 = AB.Dot(AP), D2 = AC.Dot(AP);
+	if (D1 <= 0.0f && D2 <= 0.0f)
+		return Vec3(1.0f, 0.0f, 0.0f);
+	const Vec3 BP = inPoint - inB;
+	const float D3 = AB.Dot(BP), D4 = AC.Dot(BP);
+	if (D3 >= 0.0f && D4 <= D3)
+		return Vec3(0.0f, 1.0f, 0.0f);
+	const float VC = D1 * D4 - D3 * D2;
+	if (VC <= 0.0f && D1 >= 0.0f && D3 <= 0.0f)
+	{
+		const float V = D1 / (D1 - D3);
+		return Vec3(1.0f - V, V, 0.0f);
+	}
+	const Vec3 CP = inPoint - inC;
+	const float D5 = AB.Dot(CP), D6 = AC.Dot(CP);
+	if (D6 >= 0.0f && D5 <= D6)
+		return Vec3(0.0f, 0.0f, 1.0f);
+	const float VB = D5 * D2 - D1 * D6;
+	if (VB <= 0.0f && D2 >= 0.0f && D6 <= 0.0f)
+	{
+		const float W = D2 / (D2 - D6);
+		return Vec3(1.0f - W, 0.0f, W);
+	}
+	const float VA = D3 * D6 - D5 * D4;
+	if (VA <= 0.0f && D4 >= D3 && D5 >= D6)
+	{
+		const float W = (D4 - D3) / ((D4 - D3) + (D5 - D6));
+		return Vec3(0.0f, 1.0f - W, W);
+	}
+	const float Denominator = VA + VB + VC;
+	if (Denominator <= 0.0f)
+		return Vec3(1.0f, 0.0f, 0.0f);
+	const float V = VB / Denominator, W = VC / Denominator;
+	return Vec3(1.0f - V - W, V, W);
+}
+
+uint SoftBodyMotionProperties::ProjectSphereFacePositions()
+{
+	uint Corrections = 0;
+	for (const CollidingShape &Shape : mCollidingShapes)
+	{
+		if (Shape.mMotionType == EMotionType::Dynamic || Shape.mSoftBodyInvMassScale <= 0.0f)
+			continue; // Coupled rigid position correction is outside H.
+		for (const LeafShape &Leaf : Shape.mShapes)
+		{
+			if (Leaf.mShape->GetSubType() != EShapeSubType::Sphere)
+				continue;
+			const SphereShape *Sphere = static_cast<const SphereShape *>(Leaf.mShape.GetPtr());
+			const Vec3 Center = Leaf.mTransform.GetTranslation();
+			const float Radius = Sphere->GetRadius() * Leaf.mScale.Abs().GetX() + mVertexRadius;
+			for (const Face &Triangle : mSettings->mFaces)
+			{
+				Vertex &A = mVertices[Triangle.mVertex[0]];
+				Vertex &B = mVertices[Triangle.mVertex[1]];
+				Vertex &C = mVertices[Triangle.mVertex[2]];
+				const Vec3 FaceNormal = (B.mPosition - A.mPosition).Cross(C.mPosition - A.mPosition);
+				const float FaceNormalLengthSq = FaceNormal.LengthSq();
+				if (FaceNormalLengthSq <= 1.0e-16f)
+					continue;
+				const Vec3 Weights = GetContactFaceWeights(Center, A.mPosition, B.mPosition, C.mPosition);
+				const float WA = Weights.GetX(), WB = Weights.GetY(), WC = Weights.GetZ();
+				const Vec3 Closest = WA * A.mPosition + WB * B.mPosition + WC * C.mPosition;
+				const Vec3 Delta = Closest - Center;
+				const float Distance = Delta.Length();
+				if (Distance >= Radius)
+					continue;
+				const float EffectiveInvMass = Shape.mSoftBodyInvMassScale *
+					(A.mInvMass * WA * WA + B.mInvMass * WB * WB + C.mInvMass * WC * WC);
+				if (EffectiveInvMass <= 1.0e-9f)
+					continue;
+				// At exact center-on-face symmetry, winding explicitly selects a
+				// side. H is a geometry diagnostic, not a double-sided physical law.
+				const Vec3 Normal = Distance > 1.0e-7f ? Delta / Distance : FaceNormal / Sqrt(FaceNormalLengthSq);
+				const Vec3 Correction = (Radius - Distance) / EffectiveInvMass * Normal;
+				A.mPosition += Shape.mSoftBodyInvMassScale * A.mInvMass * WA * Correction;
+				B.mPosition += Shape.mSoftBodyInvMassScale * B.mInvMass * WB * Correction;
+				C.mPosition += Shape.mSoftBodyInvMassScale * C.mInvMass * WC * Correction;
+				++Corrections;
+			}
+		}
+	}
+	return Corrections;
+}
+
 bool SoftBodyMotionProperties::RefreshCollisionPlanes()
 {
 	for (const Vertex &V : mVertices)
@@ -1392,15 +1482,18 @@ SoftBodyMotionProperties::EStatus SoftBodyMotionProperties::ParallelApplyConstra
 				const bool OrderD = ContactOrder != nullptr && ContactOrder[0] == 'D' && ContactOrder[1] == '\0';
 				const bool OrderE = ContactOrder != nullptr && ContactOrder[0] == 'E' && ContactOrder[1] == '\0';
 				const bool OrderF = ContactOrder != nullptr && ContactOrder[0] == 'F' && ContactOrder[1] == '\0';
+				const bool OrderH = ContactOrder != nullptr && ContactOrder[0] == 'H' && ContactOrder[1] == '\0';
 				const char *KinematicFlag = std::getenv("GANTRIA_CONTACT_KINEMATIC_RELATIVE");
 				const bool KinematicRelativeVelocity = KinematicFlag != nullptr
 					&& KinematicFlag[0] == '1' && KinematicFlag[1] == '\0';
 				const char *StageFlag = std::getenv("GANTRIA_CONTACT_STAGES");
 				const bool RecordStages = mVertices.size() == 16384 && StageFlag != nullptr
 					&& StageFlag[0] == '1' && StageFlag[1] == '\0';
-				const uint64 StageIntegration = RecordStages ? mContactStageIntegrationIndex++ : 0;
-				const uint32 StageBodyID = RecordStages ? ioContext.mBody->GetID().GetIndexAndSequenceNumber() : 0;
-				const char *StageMode = OrderB ? "B" : OrderC ? "C" : OrderD ? "D" : OrderE ? "E" : OrderF ? "F" : "A";
+				const char *FaceFlag = std::getenv("GANTRIA_CONTACT_FACE_DIAGNOSTIC");
+				const bool RecordFaces = OrderH && FaceFlag != nullptr && FaceFlag[0] == '1' && FaceFlag[1] == '\0';
+				const uint64 StageIntegration = RecordStages || RecordFaces ? mContactStageIntegrationIndex++ : 0;
+				const uint32 StageBodyID = RecordStages || RecordFaces ? ioContext.mBody->GetID().GetIndexAndSequenceNumber() : 0;
+				const char *StageMode = OrderB ? "B" : OrderC ? "C" : OrderD ? "D" : OrderE ? "E" : OrderF ? "F" : OrderH ? "H" : "A";
 				auto SavePositions = [this, RecordStages]()
 				{
 					Array<Vec3> Positions;
@@ -1503,6 +1596,15 @@ SoftBodyMotionProperties::EStatus SoftBodyMotionProperties::ParallelApplyConstra
 						ClothVelocityImpulse.GetX(), ClothVelocityImpulse.GetY(), ClothVelocityImpulse.GetZ(),
 						DynamicRigidVelocityImpulse.GetX(), DynamicRigidVelocityImpulse.GetY(), DynamicRigidVelocityImpulse.GetZ(),
 						ClothKineticDelta, KinematicVelocityWork);
+				}
+				if (OrderH)
+				{
+				Array<Vec3> BeforeFace = SavePositions();
+				const uint FaceCorrections = ProjectSphereFacePositions();
+				LogStage("FaceContact", &BeforeFace);
+				if (RecordFaces)
+					std::fprintf(stdout, "[Physics:FaceContact] integration=%llu body=%u corrections=%u velocity_response=INCOMPLETE rigid_reaction=INCOMPLETE\n",
+						static_cast<unsigned long long>(StageIntegration), StageBodyID, FaceCorrections);
 				}
 
 				// Private contact-order experiment B: relax the structure after the

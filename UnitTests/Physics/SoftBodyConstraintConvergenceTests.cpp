@@ -10,6 +10,7 @@
 #include <Jolt/Physics/SoftBody/SoftBodySharedSettings.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Core/StreamWrapper.h>
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <sstream>
@@ -508,7 +509,7 @@ TEST_SUITE("SoftBodyConstraintConvergenceTests")
 	{
 		Ref<SoftBodySharedSettings> Shared = MakeChain();
 		Vec3 BaselinePosition[3], BaselineVelocity[3];
-		for (const char *Order : { "", "B", "C", "D", "E", "F" })
+		for (const char *Order : { "", "B", "C", "D", "E", "F", "H" })
 		{
 			ScopedContactOrder Environment(*Order != '\0' ? Order : nullptr);
 			CHECK(Environment.mSetSucceeded);
@@ -554,7 +555,7 @@ TEST_SUITE("SoftBodyConstraintConvergenceTests")
 			}
 		Shared->CalculateEdgeLengths();
 		Shared->Optimize();
-		for (const char *Order : { "", "B", "C", "D", "E", "F" })
+		for (const char *Order : { "", "B", "C", "D", "E", "F", "H" })
 		{
 			ScopedContactOrder Environment(*Order != '\0' ? Order : nullptr);
 			CHECK(Environment.mSetSucceeded);
@@ -647,5 +648,66 @@ TEST_SUITE("SoftBodyConstraintConvergenceTests")
 						CHECK_APPROX_EQUAL(KinematicOn, KinematicOff, 1.0e-5f);
 			}
 		}
+	}
+
+	TEST_CASE("TestSphereFaceProbeDetectsInteriorContactWithoutVertexContact")
+	{
+		const auto Run = [](bool inFace, bool inSphere, const char *inOrder)
+		{
+			ScopedContactOrder Environment(inOrder);
+			CHECK(Environment.mSetSucceeded);
+			Ref<SoftBodySharedSettings> Shared = new SoftBodySharedSettings;
+			Shared->mVertices.emplace_back(Float3(0.0f, 0.0f, 0.0f));
+			Shared->mVertices.emplace_back(Float3(1.0f, 0.0f, 0.0f));
+			Shared->mVertices.emplace_back(Float3(0.0f, 1.0f, 0.0f));
+			if (inFace)
+				Shared->AddFace(SoftBodySharedSettings::Face(0, 1, 2));
+			Shared->Optimize();
+			PhysicsTestContext Context;
+			Context.ZeroGravity();
+			if (inSphere)
+			{
+				BodyCreationSettings SphereSettings(new SphereShape(0.2f), RVec3(0.25, 0.25, 0.0),
+					Quat::sIdentity(), EMotionType::Static, Layers::NON_MOVING);
+				Context.CreateBody(SphereSettings, EActivation::DontActivate);
+			}
+			SoftBodyCreationSettings SoftSettings(Shared, RVec3::sZero(), Quat::sIdentity(), Layers::MOVING);
+			SoftSettings.mVelocityReconstruction = ESoftBodyVelocityReconstruction::ConstraintDelta;
+			SoftSettings.mNumIterations = 1;
+			SoftSettings.mNumConstraintIterations = 2;
+			SoftSettings.mLinearDamping = 0.0f;
+			SoftSettings.mAllowSleeping = false;
+			SoftSettings.mUpdatePosition = false;
+			SoftSettings.mVertexRadius = 0.05f;
+			Body &Soft = *Context.GetBodyInterface().CreateSoftBody(SoftSettings);
+			Context.GetBodyInterface().AddBody(Soft.GetID(), EActivation::Activate);
+			Context.SimulateSingleStep();
+			const auto *Motion = static_cast<SoftBodyMotionProperties *>(Soft.GetMotionProperties());
+			std::array<Vec3, 3> Positions;
+			for (uint Index = 0; Index < 3; ++Index)
+			{
+				Positions[Index] = Motion->GetVertex(Index).mPosition;
+				CHECK(!Positions[Index].IsNaN());
+				CHECK(!Motion->GetVertex(Index).mVelocity.IsNaN());
+			}
+			return Positions;
+		};
+		for (bool Face : { false, true })
+			for (bool Sphere : { false, true })
+			{
+				const auto Original = Run(Face, Sphere, nullptr);
+				const auto FaceProbe = Run(Face, Sphere, "H");
+				if (!Face || !Sphere)
+					for (uint Index = 0; Index < 3; ++Index)
+						CHECK(FaceProbe[Index] == Original[Index]);
+				else
+				{
+					// The three vertices are at least 0.353 m from the
+					// center, outside sphere radius plus vertex radius (0.25 m).
+					for (uint Index = 0; Index < 3; ++Index)
+						CHECK(Original[Index].GetZ() == 0.0f);
+					CHECK(FaceProbe[0].GetZ() > 0.01f);
+				}
+			}
 	}
 }
