@@ -292,6 +292,9 @@ private:
 	/// Private unilateral hard-contact XPBD multiplier experiment (static/kinematic only)
 	bool								ProjectCollisionPositionsWithLambda(Array<float> &ioLambdas);
 
+	/// Private normal-refresh experiment: recompute vertex planes after the structural solve
+	bool								RefreshCollisionPlanes();
+
 	/// Private contact-order stage metrics; values are diagnostics, not physical impulses or work
 	void								LogContactStage(uint64 inIntegration, uint32 inBodyID, const char *inMode, const char *inStage, const Array<Vec3> *inPreviousPositions) const;
 

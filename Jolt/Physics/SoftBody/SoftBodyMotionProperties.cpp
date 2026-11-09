@@ -863,6 +863,22 @@ bool SoftBodyMotionProperties::ProjectCollisionPositionsWithLambda(Array<float> 
 	return Changed;
 }
 
+bool SoftBodyMotionProperties::RefreshCollisionPlanes()
+{
+	for (const Vertex &V : mVertices)
+		if (V.mCollidingShapeIndex < -1)
+			return false; // CCD markers carry a different contact contract.
+	// Keep mHasContact from earlier integrations. Only the candidate plane
+	// selection is reset; shape transforms remain those collected this update.
+	for (Vertex &V : mVertices)
+	{
+		V.mLargestPenetration = -FLT_MAX;
+		V.mCollidingShapeIndex = -1;
+	}
+	DetermineCollisionPlanes(0, uint(mVertices.size()));
+	return true;
+}
+
 void SoftBodyMotionProperties::LogContactStage(uint64 inIntegration, uint32 inBodyID, const char *inMode, const char *inStage, const Array<Vec3> *inPreviousPositions) const
 {
 	float MaxTension = 0.0f, MaxCompression = 0.0f, MaxPlanePenetration = 0.0f;
@@ -1331,12 +1347,13 @@ SoftBodyMotionProperties::EStatus SoftBodyMotionProperties::ParallelApplyConstra
 				const bool OrderB = ContactOrder != nullptr && ContactOrder[0] == 'B' && ContactOrder[1] == '\0';
 				const bool OrderC = ContactOrder != nullptr && ContactOrder[0] == 'C' && ContactOrder[1] == '\0';
 				const bool OrderD = ContactOrder != nullptr && ContactOrder[0] == 'D' && ContactOrder[1] == '\0';
+				const bool OrderE = ContactOrder != nullptr && ContactOrder[0] == 'E' && ContactOrder[1] == '\0';
 				const char *StageFlag = std::getenv("GANTRIA_CONTACT_STAGES");
 				const bool RecordStages = mVertices.size() == 16384 && StageFlag != nullptr
 					&& StageFlag[0] == '1' && StageFlag[1] == '\0';
 				const uint64 StageIntegration = RecordStages ? mContactStageIntegrationIndex++ : 0;
 				const uint32 StageBodyID = RecordStages ? ioContext.mBody->GetID().GetIndexAndSequenceNumber() : 0;
-				const char *StageMode = OrderB ? "B" : OrderC ? "C" : OrderD ? "D" : "A";
+				const char *StageMode = OrderB ? "B" : OrderC ? "C" : OrderD ? "D" : OrderE ? "E" : "A";
 				auto SavePositions = [this, RecordStages]()
 				{
 					Array<Vec3> Positions;
@@ -1404,6 +1421,11 @@ SoftBodyMotionProperties::EStatus SoftBodyMotionProperties::ParallelApplyConstra
 							ProcessGroup(ioContext, Group);
 						LogStage("PostStructure", &BeforeStructure);
 					}
+				}
+				if (OrderE)
+				{
+					if (RefreshCollisionPlanes())
+						LogStage("RefreshedPlanes", nullptr);
 				}
 				Array<Vec3> BeforeFinalContact = SavePositions();
 				Vec3 ClothVelocityImpulse = Vec3::sZero(), DynamicRigidVelocityImpulse = Vec3::sZero();
