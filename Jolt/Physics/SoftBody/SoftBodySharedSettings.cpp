@@ -11,6 +11,7 @@
 #include <Jolt/Core/QuickSort.h>
 #include <Jolt/Core/UnorderedSet.h>
 #include <Jolt/Core/BinaryHeap.h>
+#include <algorithm>
 
 JPH_NAMESPACE_BEGIN
 
@@ -704,6 +705,28 @@ void SoftBodySharedSettings::Optimize(OptimizationResults &outResults)
 	// Which group we are currently filling and its vertices
 	int current_group_idx = 0;
 	Array<uint> current_group;
+	Array<uint> frontier;
+	Array<uint32> frontier_stamps(mVertices.size(), 0);
+	Array<uint32> frontier_scores(mVertices.size(), 0);
+	Array<float> frontier_distances(mVertices.size());
+	uint32 frontier_stamp = 1;
+	auto add_to_frontier = [&](uint inVertex) {
+		for (size_t ci = connectivity_offsets[inVertex]; ci < connectivity_offsets[inVertex] + connectivity_lengths[inVertex]; ++ci)
+		{
+			const Connection &c = connectivity[ci];
+			uint v = c.mVertex;
+			if (group_idx[v] != -1)
+				continue;
+			if (frontier_stamps[v] != frontier_stamp)
+			{
+				frontier_stamps[v] = frontier_stamp;
+				frontier_scores[v] = 0;
+				frontier_distances[v] = (Vec3(mVertices[v].mPosition) - Vec3(mVertices[current_group.front()].mPosition)).LengthSq();
+				frontier.push_back(v);
+			}
+			frontier_scores[v] += c.mCount;
+		}
+	};
 
 	// Start greedy algorithm to group vertices
 	for (;;)
@@ -753,6 +776,7 @@ void SoftBodySharedSettings::Optimize(OptimizationResults &outResults)
 		// Initialize the current group with 1 vertex
 		current_group.push_back(current_vertex);
 		group_idx[current_vertex] = current_group_idx;
+		add_to_frontier(current_vertex);
 
 		// Fill up the group
 		for (;;)
@@ -761,30 +785,20 @@ void SoftBodySharedSettings::Optimize(OptimizationResults &outResults)
 			uint best_vertex = UINT_MAX;
 			uint best_num_connections = 0;
 			float best_dist_sq = FLT_MAX;
-			for (uint i = 0; i < (uint)current_group.size(); ++i) // For all vertices in the current group
-				for (size_t ci = connectivity_offsets[current_group[i]]; ci < connectivity_offsets[current_group[i]] + connectivity_lengths[current_group[i]]; ++ci)
+			// The frontier retains the first-seen nested adjacency order from the
+			// original scan. Scores are updated only when a vertex joins the group.
+			for (uint v : frontier)
+				if (group_idx[v] == -1)
 				{
-					const Connection &c = connectivity[ci];
-					uint v = c.mVertex;
-					if (group_idx[v] == -1) // Ungrouped vertices only
+					uint num_connections = frontier_scores[v];
+					float dist_sq = frontier_distances[v];
+					if (best_vertex == UINT_MAX
+						|| num_connections > best_num_connections
+						|| (num_connections == best_num_connections && dist_sq < best_dist_sq))
 					{
-						// Count the number of connections to this group
-						uint num_connections = 0;
-						for (size_t vi = connectivity_offsets[v]; vi < connectivity_offsets[v] + connectivity_lengths[v]; ++vi)
-							if (group_idx[connectivity[vi].mVertex] == current_group_idx)
-								num_connections += connectivity[vi].mCount;
-
-						// Calculate distance to group centroid
-						float dist_sq = (Vec3(mVertices[v].mPosition) - Vec3(mVertices[current_group.front()].mPosition)).LengthSq();
-
-						if (best_vertex == UINT_MAX
-							|| num_connections > best_num_connections
-							|| (num_connections == best_num_connections && dist_sq < best_dist_sq))
-						{
-							best_vertex = v;
-							best_num_connections = num_connections;
-							best_dist_sq = dist_sq;
-						}
+						best_vertex = v;
+						best_num_connections = num_connections;
+						best_dist_sq = dist_sq;
 					}
 				}
 
@@ -793,6 +807,7 @@ void SoftBodySharedSettings::Optimize(OptimizationResults &outResults)
 			{
 				current_group.push_back(best_vertex);
 				group_idx[best_vertex] = current_group_idx;
+				add_to_frontier(best_vertex);
 			}
 
 			// Create a new group?
@@ -800,6 +815,12 @@ void SoftBodySharedSettings::Optimize(OptimizationResults &outResults)
 				|| (current_group.size() > SoftBodyUpdateContext::cVertexConstraintBatch / 2 && best_vertex == UINT_MAX)) // If half full and we found no connected vertex, yes
 			{
 				current_group.clear();
+				frontier.clear();
+				if (++frontier_stamp == 0)
+				{
+					std::fill(frontier_stamps.begin(), frontier_stamps.end(), 0);
+					frontier_stamp = 1;
+				}
 				current_group_idx++;
 				break;
 			}
