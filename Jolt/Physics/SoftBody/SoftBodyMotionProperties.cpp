@@ -13,6 +13,7 @@
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/Physics/Body/BodyManager.h>
 #include <Jolt/Core/ScopeExit.h>
+#include <cstdlib>
 #ifdef JPH_DEBUG_RENDERER
 	#include <Jolt/Renderer/DebugRenderer.h>
 #endif // JPH_DEBUG_RENDERER
@@ -1210,6 +1211,14 @@ SoftBodyMotionProperties::EStatus SoftBodyMotionProperties::ParallelApplyConstra
 				}
 
 				ApplyCollisionConstraintsAndUpdateVelocities(ioContext);
+
+				// Private contact-order experiment B: relax the structure after the
+				// existing contact solve. Velocity was reconstructed above, so this
+				// mode is a diagnostic of ordering, not an accepted physical update.
+				const char *ContactOrder = std::getenv("GANTRIA_CONTACT_ORDER");
+				if (ContactOrder != nullptr && ContactOrder[0] == 'B' && ContactOrder[1] == '\0')
+					for (uint Group = 0; Group < mSettings->mUpdateGroups.size(); ++Group)
+						ProcessGroup(ioContext, Group);
 
 				uint iteration = ioContext.mNextIteration.fetch_add(1, memory_order_relaxed);
 				if (iteration < mNumIterations)
