@@ -827,6 +827,39 @@ bool SoftBodyMotionProperties::ProjectCollisionPositionsOnly()
 	return Projected;
 }
 
+bool SoftBodyMotionProperties::ProjectCollisionPositionsWithLambda(Array<float> &ioLambdas)
+{
+	bool Changed = false;
+	for (uint Index = 0; Index < mVertices.size(); ++Index)
+	{
+		Vertex &VertexState = mVertices[Index];
+		if (VertexState.mInvMass <= 0.0f || VertexState.mCollidingShapeIndex < 0)
+			continue;
+		const CollidingShape &Shape = mCollidingShapes[VertexState.mCollidingShapeIndex];
+		if (Shape.mMotionType == EMotionType::Dynamic)
+			continue; // A rigid position correction would be needed for a coupled dynamic solve.
+		const float W = Shape.mSoftBodyInvMassScale * VertexState.mInvMass;
+		if (W <= 0.0f)
+			continue;
+		const float C = VertexState.mCollisionPlane.SignedDistance(VertexState.mPosition) - mVertexRadius;
+		const float PreviousLambda = ioLambdas[Index];
+		const float Lambda = max(0.0f, PreviousLambda - C / W);
+		const float DeltaLambda = Lambda - PreviousLambda;
+		ioLambdas[Index] = Lambda;
+		if (DeltaLambda != 0.0f)
+		{
+			VertexState.mPosition += VertexState.mCollisionPlane.GetNormal() * (W * DeltaLambda);
+			Changed = true;
+		}
+		if (Lambda > 0.0f)
+		{
+			VertexState.mHasContact = true;
+			RequestContactCallback();
+		}
+	}
+	return Changed;
+}
+
 void SoftBodyMotionProperties::ApplyCollisionConstraintsAndUpdateVelocities(const SoftBodyUpdateContext &inContext)
 {
 	JPH_PROFILE_FUNCTION();
@@ -1231,6 +1264,14 @@ SoftBodyMotionProperties::EStatus SoftBodyMotionProperties::ParallelApplyConstra
 				const char *ContactOrder = std::getenv("GANTRIA_CONTACT_ORDER");
 				const bool OrderB = ContactOrder != nullptr && ContactOrder[0] == 'B' && ContactOrder[1] == '\0';
 				const bool OrderC = ContactOrder != nullptr && ContactOrder[0] == 'C' && ContactOrder[1] == '\0';
+				const bool OrderD = ContactOrder != nullptr && ContactOrder[0] == 'D' && ContactOrder[1] == '\0';
+				uint ContactPasses = OrderD ? 4 : 1;
+				if (OrderC || OrderD)
+				{
+					const char *PassCount = std::getenv("GANTRIA_CONTACT_PASSES");
+					if (PassCount != nullptr && PassCount[0] >= '1' && PassCount[0] <= '4' && PassCount[1] == '\0')
+						ContactPasses = uint(PassCount[0] - '0');
+				}
 				bool ContactActive = false;
 				if (OrderB)
 					for (const Vertex &VertexState : mVertices)
@@ -1244,9 +1285,26 @@ SoftBodyMotionProperties::EStatus SoftBodyMotionProperties::ParallelApplyConstra
 				{
 					// Alternate one contact projection with one more complete
 					// structural pass. Retained Q2 multipliers continue from sweep 2.
-					if (ProjectCollisionPositionsOnly())
+					for (uint Pass = 0; Pass < ContactPasses; ++Pass)
+					{
+						if (!ProjectCollisionPositionsOnly())
+							break;
 						for (uint Group = 0; Group < mSettings->mUpdateGroups.size(); ++Group)
 							ProcessGroup(ioContext, Group);
+					}
+				}
+				if (OrderD)
+				{
+					// Unilateral hard-contact XPBD (compliance zero) with a
+					// per-vertex multiplier retained only within this integration.
+					Array<float> ContactLambdas(mVertices.size(), 0.0f);
+					for (uint Pass = 0; Pass < ContactPasses; ++Pass)
+					{
+						if (!ProjectCollisionPositionsWithLambda(ContactLambdas))
+							break;
+						for (uint Group = 0; Group < mSettings->mUpdateGroups.size(); ++Group)
+							ProcessGroup(ioContext, Group);
+					}
 				}
 				ApplyCollisionConstraintsAndUpdateVelocities(ioContext);
 

@@ -289,6 +289,9 @@ private:
 	/// Private alternating-order experiment: position projection without velocity impulses
 	bool								ProjectCollisionPositionsOnly();
 
+	/// Private unilateral hard-contact XPBD multiplier experiment (static/kinematic only)
+	bool								ProjectCollisionPositionsWithLambda(Array<float> &ioLambdas);
+
 	/// Update the state of the soft body (position, velocity, bounds)
 	void								UpdateSoftBodyState(SoftBodyUpdateContext &ioContext, const PhysicsSettings &inPhysicsSettings);
 
