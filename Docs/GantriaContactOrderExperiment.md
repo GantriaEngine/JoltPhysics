@@ -22,6 +22,14 @@ both exactly in the XY plane, the tested radial normals and edge corrections
 cannot select a Z sign. A winding-based sign would introduce an explicit
 one-sided material policy and is outside this double-sided solver experiment.
 
+C and D are not yet physical fixes: their intermediate position-only contact
+steps remove penetration before the original final friction calculation. That
+calculation limits friction from the final residual projection distance, so it
+does not account for earlier contact correction or D's retained contact
+multiplier. A lower strain or zero penetration result cannot be accepted until
+normal impulse, friction, restitution, and external-work accounting are made
+consistent and independently qualified.
+
 `GANTRIA_CONTACT_STAGES=1` on a single 128×128 cloth logs
 `[Physics:ContactStage]` CSV rows at precontact, intermediate contact,
 poststructure, final contact, and refreshed-plane stages as applicable. Each
