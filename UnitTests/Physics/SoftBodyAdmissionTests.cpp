@@ -8,7 +8,10 @@
 #include <Jolt/Physics/SoftBody/SoftBodySharedSettings.h>
 #include <Jolt/Physics/SoftBody/SoftBodyCreationSettings.h>
 #include <Jolt/Physics/SoftBody/SoftBodyMotionProperties.h>
+#include <Jolt/Core/StreamWrapper.h>
 #include <cmath>
+#include <iostream>
+#include <sstream>
 
 namespace {
     template <class T>
@@ -28,6 +31,20 @@ namespace {
     {
         return std::isfinite(inValue.GetX()) && std::isfinite(inValue.GetY()) &&
             std::isfinite(inValue.GetZ());
+    }
+
+    uint64 Fingerprint(const SoftBodySharedSettings &inSettings)
+    {
+        std::ostringstream bytes(std::ios::out | std::ios::binary);
+        StreamOutWrapper stream(bytes);
+        inSettings.SaveBinaryState(stream);
+        uint64 hash = 14695981039346656037ull;
+        for (unsigned char byte : bytes.str())
+        {
+            hash ^= byte;
+            hash *= 1099511628211ull;
+        }
+        return hash;
     }
 }
 
@@ -66,6 +83,7 @@ TEST_SUITE("SoftBodyAdmissionTests")
         CHECK(IsPermutation(results.mDihedralBendRemap));
         CHECK(IsPermutation(results.mVolumeRemap));
         CHECK(results.mEdgeRemap.size() == 5);
+        std::cout << "[Physics:AdmissionGraph] mixed_digest=" << Fingerprint(*shared_settings) << '\n';
 
         PhysicsTestContext context;
         context.ZeroGravity();
@@ -107,6 +125,7 @@ TEST_SUITE("SoftBodyAdmissionTests")
         CHECK(rods->mRodBendTwistConstraints.size() == 1);
         CHECK(rods->mRodBendTwistConstraints[0].mRod[0] < 2);
         CHECK(rods->mRodBendTwistConstraints[0].mRod[1] < 2);
+        std::cout << "[Physics:AdmissionGraph] rods_digest=" << Fingerprint(*rods) << '\n';
 
         Ref<SoftBodySharedSettings> unpinned = new SoftBodySharedSettings;
         unpinned->mVertices.push_back(SoftBodySharedSettings::Vertex(Float3(0, 0, 0)));
@@ -120,5 +139,48 @@ TEST_SUITE("SoftBodyAdmissionTests")
         CHECK(IsPermutation(unpinned_results.mEdgeRemap));
         CHECK(unpinned->mVertices.size() == 3); // The isolated vertex is retained.
         CHECK(unpinned->mEdgeConstraints.size() == 2);
+        std::cout << "[Physics:AdmissionGraph] unpinned_digest=" << Fingerprint(*unpinned) << '\n';
+    }
+
+    TEST_CASE("TestOptimizeConnectedGridFingerprint")
+    {
+        constexpr uint cResolution = 32;
+        Ref<SoftBodySharedSettings> shared_settings = new SoftBodySharedSettings;
+        auto index = [](uint inX, uint inY) { return inY * cResolution + inX; };
+        for (uint y = 0; y < cResolution; ++y)
+            for (uint x = 0; x < cResolution; ++x)
+            {
+                Float3 position(float(x) / float(cResolution - 1) * 8.0f,
+                    float(y) / float(cResolution - 1) * 8.0f, 0.0f);
+                shared_settings->mVertices.push_back(SoftBodySharedSettings::Vertex(
+                    position, Float3(0, 0, 0), y == 0 ? 0.0f : 1.0f));
+            }
+        for (uint y = 0; y < cResolution; ++y)
+            for (uint x = 0; x < cResolution; ++x)
+            {
+                uint a = index(x, y);
+                if (x + 1 < cResolution)
+                {
+                    shared_settings->mEdgeConstraints.push_back(SoftBodySharedSettings::Edge(a, index(x + 1, y)));
+                    if (x % 7 == 0) // Repeated endpoint contributes to the original connection weight.
+                        shared_settings->mEdgeConstraints.push_back(SoftBodySharedSettings::Edge(a, index(x + 1, y)));
+                }
+                if (y + 1 < cResolution)
+                    shared_settings->mEdgeConstraints.push_back(SoftBodySharedSettings::Edge(a, index(x, y + 1)));
+                if (x + 1 < cResolution && y + 1 < cResolution)
+                {
+                    shared_settings->mEdgeConstraints.push_back(SoftBodySharedSettings::Edge(a, index(x + 1, y + 1)));
+                    shared_settings->mEdgeConstraints.push_back(SoftBodySharedSettings::Edge(index(x + 1, y), index(x, y + 1)));
+                    shared_settings->AddFace(SoftBodySharedSettings::Face(a, index(x, y + 1), index(x + 1, y + 1)));
+                    shared_settings->AddFace(SoftBodySharedSettings::Face(a, index(x + 1, y + 1), index(x + 1, y)));
+                }
+            }
+        shared_settings->CalculateEdgeLengths();
+        SoftBodySharedSettings::OptimizationResults results;
+        shared_settings->Optimize(results);
+        CHECK(IsPermutation(results.mEdgeRemap));
+        const uint64 digest = Fingerprint(*shared_settings);
+        std::cout << "[Physics:AdmissionGraph] connected32x32_digest=" << digest << '\n';
+        CHECK(digest != 0);
     }
 }
