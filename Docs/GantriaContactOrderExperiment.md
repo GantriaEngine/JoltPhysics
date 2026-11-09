@@ -30,7 +30,7 @@ linearized plane penetration, finite stored position/velocity counts, stored
 velocity kinetic energy, and position displacement since the previous stage.
 The separate `[Physics:ContactVelocityImpulse]` row reports the summed
 velocity-domain change in cloth particle momentum, summed dynamic-rigid
-contact impulse, and cloth kinetic-energy delta during the final contact
+solver impulse, and cloth kinetic-energy delta during the final contact
 velocity step. Position projection displacement is **not** an impulse.
 Linearized plane penetration is **not** sphere/triangle penetration. Stored
 precontact velocity has not yet been reconstructed for that integration.

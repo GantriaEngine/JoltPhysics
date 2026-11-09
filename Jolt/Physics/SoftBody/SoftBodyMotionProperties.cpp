@@ -927,7 +927,7 @@ void SoftBodyMotionProperties::LogContactStage(uint64 inIntegration, uint32 inBo
 		}
 	}
 	if (inIntegration == 0 && inStage[0] == 'P')
-		std::fprintf(stdout, "[Physics:ContactStage] integration,body,mode,stage,max_tension,tension_edge,max_compression,compression_edge,max_plane_penetration,active_planes,nonfinite_positions,nonfinite_velocities,kinetic_j,sum_position_delta_m,max_position_delta_m\n");
+		std::fprintf(stdout, "[Physics:ContactStage] integration,body,mode,stage,max_tension,tension_edge,max_compression,compression_edge,max_linearized_plane_penetration_m,active_planes,nonfinite_positions,nonfinite_velocities,stored_velocity_kinetic_j,sum_position_delta_m,max_position_delta_m\n");
 	std::fprintf(stdout, "[Physics:ContactStage] %llu,%u,%s,%s,%.9g,%u,%.9g,%u,%.9g,%u,%u,%u,%.9g,%.9g,%.9g\n",
 		static_cast<unsigned long long>(inIntegration), inBodyID,
 		inMode, inStage, MaxTension, TensionEdge, MaxCompression, CompressionEdge,
@@ -1438,7 +1438,7 @@ SoftBodyMotionProperties::EStatus SoftBodyMotionProperties::ParallelApplyConstra
 				if (RecordStages)
 				{
 					if (StageIntegration == 0)
-						std::fprintf(stdout, "[Physics:ContactVelocityImpulse] integration,body,mode,cloth_impulse_x_ns,cloth_impulse_y_ns,cloth_impulse_z_ns,dynamic_rigid_impulse_x_ns,dynamic_rigid_impulse_y_ns,dynamic_rigid_impulse_z_ns,cloth_kinetic_delta_j\n");
+						std::fprintf(stdout, "[Physics:ContactVelocityImpulse] integration,body,mode,cloth_velocity_delta_momentum_x_ns,cloth_velocity_delta_momentum_y_ns,cloth_velocity_delta_momentum_z_ns,dynamic_rigid_solver_impulse_x_ns,dynamic_rigid_solver_impulse_y_ns,dynamic_rigid_solver_impulse_z_ns,cloth_velocity_kinetic_delta_j\n");
 					std::fprintf(stdout, "[Physics:ContactVelocityImpulse] %llu,%u,%s,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g\n",
 						static_cast<unsigned long long>(StageIntegration), StageBodyID, StageMode,
 						ClothVelocityImpulse.GetX(), ClothVelocityImpulse.GetY(), ClothVelocityImpulse.GetZ(),
