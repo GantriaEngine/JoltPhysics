@@ -8,7 +8,10 @@
 #include <Jolt/Physics/SoftBody/SoftBodyCreationSettings.h>
 #include <Jolt/Physics/SoftBody/SoftBodyMotionProperties.h>
 #include <Jolt/Physics/SoftBody/SoftBodySharedSettings.h>
+#include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Core/StreamWrapper.h>
+#include <cmath>
+#include <cstdlib>
 #include <sstream>
 
 TEST_SUITE("SoftBodyConstraintConvergenceTests")
@@ -58,6 +61,37 @@ TEST_SUITE("SoftBodyConstraintConvergenceTests")
 		inSettings.SaveBinaryState(Wrapper);
 		return Stream.str();
 	}
+
+	struct ScopedContactOrder
+	{
+		explicit ScopedContactOrder(const char *inOrder)
+		{
+			const char *Previous = std::getenv("GANTRIA_CONTACT_ORDER");
+			mHadPrevious = Previous != nullptr;
+			if (mHadPrevious)
+				mPrevious = Previous;
+			mSetSucceeded = Set(inOrder);
+		}
+
+		~ScopedContactOrder()
+		{
+			Set(mHadPrevious ? mPrevious.c_str() : nullptr);
+		}
+
+		static bool Set(const char *inOrder)
+		{
+#ifdef _WIN32
+			return _putenv_s("GANTRIA_CONTACT_ORDER", inOrder != nullptr ? inOrder : "") == 0;
+#else
+			return inOrder != nullptr ? setenv("GANTRIA_CONTACT_ORDER", inOrder, 1) == 0
+				: unsetenv("GANTRIA_CONTACT_ORDER") == 0;
+#endif
+		}
+
+		bool mSetSucceeded = false;
+		bool mHadPrevious = false;
+		std::string mPrevious;
+	};
 
 	static Body &CreateSoft(PhysicsTestContext &inContext, const SoftBodySharedSettings *inShared, uint32 inSweeps, uint32 InTemporalIterations = 1)
 	{
@@ -436,6 +470,94 @@ TEST_SUITE("SoftBodyConstraintConvergenceTests")
 				CHECK(OldEdge.mRestLength == NewEdge.mRestLength);
 				CHECK(OldEdge.mCompliance == NewEdge.mCompliance);
 			}
+		}
+	}
+
+	TEST_CASE("TestContactOrderModesLeaveNoContactGraphExact")
+	{
+		Ref<SoftBodySharedSettings> Shared = MakeChain();
+		Vec3 BaselinePosition[3], BaselineVelocity[3];
+		for (const char *Order : { "", "B", "C", "D", "E" })
+		{
+			ScopedContactOrder Environment(*Order != '\0' ? Order : nullptr);
+			CHECK(Environment.mSetSucceeded);
+			PhysicsTestContext Context;
+			Context.ZeroGravity();
+			Body &BodyState = CreateSoft(Context, Shared, 2);
+			auto *Motion = static_cast<SoftBodyMotionProperties *>(BodyState.GetMotionProperties());
+			Motion->GetVertex(2).mPosition = Vec3(2.3f, 0, 0);
+			Context.SimulateSingleStep();
+			for (uint Index = 0; Index < 3; ++Index)
+			{
+				const auto &VertexState = Motion->GetVertex(Index);
+				CHECK(!VertexState.mPosition.IsNaN());
+				CHECK(!VertexState.mVelocity.IsNaN());
+				if (*Order == '\0')
+				{
+					BaselinePosition[Index] = VertexState.mPosition;
+					BaselineVelocity[Index] = VertexState.mVelocity;
+				}
+				else
+				{
+					CHECK(VertexState.mPosition == BaselinePosition[Index]);
+					CHECK(VertexState.mVelocity == BaselineVelocity[Index]);
+				}
+			}
+		}
+	}
+
+	TEST_CASE("TestContactOrderModesStayFiniteOnStaticSphere")
+	{
+		Ref<SoftBodySharedSettings> Shared = new SoftBodySharedSettings;
+		for (uint Y = 0; Y < 3; ++Y)
+			for (uint X = 0; X < 3; ++X)
+				Shared->mVertices.emplace_back(Float3(float(X), float(Y), 0.0f), Float3(0, 0, 0), Y == 2 ? 0.0f : 1.0f);
+		for (uint Y = 0; Y < 3; ++Y)
+			for (uint X = 0; X < 3; ++X)
+			{
+				const uint Index = 3 * Y + X;
+				if (X + 1 < 3)
+					Shared->mEdgeConstraints.emplace_back(Index, Index + 1, 1.0e-6f);
+				if (Y + 1 < 3)
+					Shared->mEdgeConstraints.emplace_back(Index, Index + 3, 1.0e-6f);
+			}
+		Shared->CalculateEdgeLengths();
+		Shared->Optimize();
+		for (const char *Order : { "", "B", "C", "D", "E" })
+		{
+			ScopedContactOrder Environment(*Order != '\0' ? Order : nullptr);
+			CHECK(Environment.mSetSucceeded);
+			PhysicsTestContext Context;
+			Context.ZeroGravity();
+			BodyCreationSettings SphereSettings(new SphereShape(0.75f), RVec3(2.5, 1, 0), Quat::sIdentity(), EMotionType::Static, Layers::NON_MOVING);
+			Context.CreateBody(SphereSettings, EActivation::DontActivate);
+			SoftBodyCreationSettings SoftSettings(Shared, RVec3::sZero(), Quat::sIdentity(), Layers::MOVING);
+			SoftSettings.mVelocityReconstruction = ESoftBodyVelocityReconstruction::ConstraintDelta;
+			SoftSettings.mNumIterations = 2;
+			SoftSettings.mNumConstraintIterations = 2;
+			SoftSettings.mLinearDamping = 0.0f;
+			SoftSettings.mAllowSleeping = false;
+			SoftSettings.mUpdatePosition = false;
+			SoftSettings.mVertexRadius = 0.05f;
+			Body &BodyState = *Context.GetBodyInterface().CreateSoftBody(SoftSettings);
+			Context.GetBodyInterface().AddBody(BodyState.GetID(), EActivation::Activate);
+			auto *Motion = static_cast<SoftBodyMotionProperties *>(BodyState.GetMotionProperties());
+			Context.SimulateSingleStep();
+			for (uint Index = 0; Index < 9; ++Index)
+			{
+				const auto &VertexState = Motion->GetVertex(Index);
+				CHECK(std::isfinite(VertexState.mPosition.GetX()));
+				CHECK(std::isfinite(VertexState.mPosition.GetY()));
+				CHECK(std::isfinite(VertexState.mPosition.GetZ()));
+				CHECK(std::isfinite(VertexState.mVelocity.GetX()));
+				CHECK(std::isfinite(VertexState.mVelocity.GetY()));
+				CHECK(std::isfinite(VertexState.mVelocity.GetZ()));
+				if (*Order != 'B' && VertexState.mInvMass > 0.0f)
+					CHECK((VertexState.mPosition - Vec3(2.5f, 1.0f, 0.0f)).Length() >= 0.8f - 1.0e-4f);
+				if (Index / 3 == 2)
+					CHECK(VertexState.mPosition.GetY() == 2.0f);
+			}
+			CHECK(Motion->GetVertex(5).mPosition.GetX() < 2.0f);
 		}
 	}
 }
