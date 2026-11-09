@@ -55,13 +55,16 @@ optimal batch size outside the measured scene and worker caps.
 ## Unprofiled timing evidence
 
 The frozen B and final C Provider and Engine matrices each completed their
-planned matched processes. The local reducer checked stdout/stderr SHA-256,
+planned processes. Each matrix was counterbalanced against A in a separate
+cohort; the B/C percentages below align the same scene, cap, tail, and repeat
+across cohorts and are not direct counterbalanced B/C pairs. The local reducer
+checked stdout/stderr SHA-256,
 exit status, measured and warmup frame counts, an uninstrumented Provider
 marker or unprofiled Engine CMake cache, and the frozen Jolt N80/Q2 caps.
-Numbers below are medians of process P50s; matched percentages compare the
-same counterbalanced pairs. They are timing evidence, not a physical winner.
+Numbers below are medians of process P50s; percentages are medians of the
+aligned B/C changes. They are timing evidence, not a physical winner.
 
-| 16K cloth, no collider | Frozen B | Final C | Matched P50 change |
+| 16K cloth, no collider | Frozen B | Final C | Aligned P50 change |
 | --- | ---: | ---: | ---: |
 | Provider W8 cold | 67.73 ms | 55.37 ms | −18.24% |
 | Provider W8 warm | 67.99 ms | 55.88 ms | −17.80% |
@@ -73,7 +76,7 @@ same counterbalanced pairs. They are timing evidence, not a physical winner.
 Provider total and full Engine physics-call timings come from different
 executables and measurement boundaries. They independently show the W8
 direction; their difference is not an Engine overhead measurement. Per-process
-P50/P95/P99, CPU, working set, admission, retirement, and matched deltas for
+P50/P95/P99, CPU, working set, admission, retirement, and aligned deltas for
 all scene/worker/tail cells are in the `PerformanceReduction` artifact. Its
 `Review.md` displays the full native and Engine B/C matrix and XPBD timing
 controls. The Provider harness has no matched cross-backend quality envelope,
@@ -85,6 +88,14 @@ each found a median W8 P50 change of −2.45% at size 512 and −20.62% at size
 cloth terminal trajectory hash differed from B. The grouping result therefore
 requires numerical and physical qualification, not a source-level exactness
 assumption.
+
+A separate final-guard confirmation directly counterbalanced B and C at the
+same 16K-cloth W8 cell after Engine cache, joint, and sleep guards. The three
+uninstrumented process P50 pairs were 69.739→56.108 ms (−19.55%),
+70.299→55.460 ms (−21.11%), and 70.128→55.833 ms (−20.38%). Their median
+paired change was −20.38%, and the changed terminal hashes remained subject
+to the same physical gate. These direct pairs confirm the large-cloth W8
+direction without treating separate matrix cohorts as paired runs.
 
 The lazy multiplier-clearing change was tested separately at the default 256
 group size. It removes bulk zero fills before each temporal integration.
