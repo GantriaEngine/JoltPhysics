@@ -336,8 +336,8 @@ void SoftBodyMotionProperties::IntegratePositions(SoftBodyUpdateContext &inConte
 	JPH_PROFILE_FUNCTION();
 	if (mNumConstraintIterations > 1)
 	{
-		std::fill(mEdgeLambdas.begin(), mEdgeLambdas.end(), 0.0f);
-		std::fill(mVolumeLambdas.begin(), mVolumeLambdas.end(), 0.0f);
+		// The first sweep overwrites every multiplier before a later sweep can read it.
+		// Degenerate constraints that skip the first sweep clear their own multiplier.
 		inContext.mConstraintSweep.store(0, memory_order_relaxed);
 	}
 
@@ -528,7 +528,11 @@ void SoftBodyMotionProperties::ApplyVolumeConstraints(const SoftBodyUpdateContex
 		// Calculate -lambda
 		float denom = w1 * d1c.LengthSq() + w2 * d2c.LengthSq() + w3 * d3c.LengthSq() + w4 * d4c.LengthSq() + v->mCompliance * inv_dt_sq;
 		if (denom < 1.0e-12f)
+		{
+			if (RetainLambda && FirstSweep)
+				mVolumeLambdas[v - mSettings->mVolumeConstraints.data()] = 0.0f;
 			continue;
+		}
 		float minus_lambda = c / denom;
 		if (RetainLambda)
 		{
@@ -662,7 +666,11 @@ void SoftBodyMotionProperties::ApplyEdgeConstraints(const SoftBodyUpdateContext 
 		// Apply correction
 		float denom = length * (v0.mInvMass + v1.mInvMass + e->mCompliance * inv_dt_sq);
 		if (denom < 1.0e-12f)
+		{
+			if (RetainLambda && FirstSweep)
+				mEdgeLambdas[e - mSettings->mEdgeConstraints.data()] = 0.0f;
 			continue;
+		}
 		Vec3 correction;
 		if (!RetainLambda)
 			correction = delta * (length - e->mRestLength) / denom;

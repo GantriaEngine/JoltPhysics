@@ -59,11 +59,11 @@ TEST_SUITE("SoftBodyConstraintConvergenceTests")
 		return Stream.str();
 	}
 
-	static Body &CreateSoft(PhysicsTestContext &inContext, const SoftBodySharedSettings *inShared, uint32 inSweeps)
+	static Body &CreateSoft(PhysicsTestContext &inContext, const SoftBodySharedSettings *inShared, uint32 inSweeps, uint32 InTemporalIterations = 1)
 	{
 		SoftBodyCreationSettings settings(inShared, RVec3::sZero(), Quat::sIdentity(), Layers::MOVING);
 		settings.mVelocityReconstruction = ESoftBodyVelocityReconstruction::ConstraintDelta;
-		settings.mNumIterations = 1;
+		settings.mNumIterations = InTemporalIterations;
 		settings.mNumConstraintIterations = inSweeps;
 		settings.mLinearDamping = 0.0f;
 		settings.mAllowSleeping = false;
@@ -272,8 +272,8 @@ TEST_SUITE("SoftBodyConstraintConvergenceTests")
 			}
 		Shared->CalculateEdgeLengths();
 		Shared->Optimize();
-		Body &SerialBody = CreateSoft(Serial, Shared, 2);
-		Body &ParallelBody = CreateSoft(Parallel, Shared, 2);
+		Body &SerialBody = CreateSoft(Serial, Shared, 2, 2);
+		Body &ParallelBody = CreateSoft(Parallel, Shared, 2, 2);
 		auto *SerialMotion = static_cast<SoftBodyMotionProperties *>(SerialBody.GetMotionProperties());
 		auto *ParallelMotion = static_cast<SoftBodyMotionProperties *>(ParallelBody.GetMotionProperties());
 		const uint Disturbed = 12 * Resolution + 12;
@@ -286,8 +286,90 @@ TEST_SUITE("SoftBodyConstraintConvergenceTests")
 		}
 		for (uint Index = 0; Index < Shared->mVertices.size(); ++Index)
 		{
-			CHECK_APPROX_EQUAL(SerialMotion->GetVertex(Index).mPosition, ParallelMotion->GetVertex(Index).mPosition, 1.0e-5f);
-			CHECK_APPROX_EQUAL(SerialMotion->GetVertex(Index).mVelocity, ParallelMotion->GetVertex(Index).mVelocity, 1.0e-5f);
+			CHECK(SerialMotion->GetVertex(Index).mPosition == ParallelMotion->GetVertex(Index).mPosition);
+			CHECK(SerialMotion->GetVertex(Index).mVelocity == ParallelMotion->GetVertex(Index).mVelocity);
+			CHECK(SerialMotion->GetVertex(Index).mConstraintDelta == ParallelMotion->GetVertex(Index).mConstraintDelta);
+		}
+	}
+
+	TEST_CASE("TestSkippedEdgeFirstSweepClearsPreviousMultiplier")
+	{
+		PhysicsTestContext History;
+		PhysicsTestContext Fresh;
+		History.ZeroGravity();
+		Fresh.ZeroGravity();
+		Ref<SoftBodySharedSettings> Shared = new SoftBodySharedSettings;
+		Shared->mVertices.push_back(SoftBodySharedSettings::Vertex(Float3(0, 0, 0), Float3(0, 0, 0), 0.0f));
+		Shared->mVertices.push_back(SoftBodySharedSettings::Vertex(Float3(1, 0, 0)));
+		Shared->mVertices.push_back(SoftBodySharedSettings::Vertex(Float3(2, 0, 0), Float3(0, 0, 0), 0.0f));
+		Shared->mEdgeConstraints.emplace_back(0, 1, 0.001f);
+		Shared->mEdgeConstraints.emplace_back(1, 2, 0.0f);
+		Shared->CalculateEdgeLengths();
+		Shared->Optimize();
+		Body &HistoryBody = CreateSoft(History, Shared, 2);
+		Body &FreshBody = CreateSoft(Fresh, Shared, 2);
+		auto *HistoryMotion = static_cast<SoftBodyMotionProperties *>(HistoryBody.GetMotionProperties());
+		auto *FreshMotion = static_cast<SoftBodyMotionProperties *>(FreshBody.GetMotionProperties());
+		HistoryMotion->GetVertex(1).mPosition = Vec3(1.4f, 0, 0);
+		History.SimulateSingleStep(); // Leaves a nonzero retained multiplier for the first edge.
+		CHECK(HistoryMotion->GetVertex(1).mConstraintDelta.LengthSq() > 0.0f);
+		HistoryMotion->GetVertex(1).mPosition = Vec3::sZero();
+		HistoryMotion->GetVertex(1).mVelocity = Vec3::sZero();
+		FreshMotion->GetVertex(1).mPosition = Vec3::sZero();
+		FreshMotion->GetVertex(1).mVelocity = Vec3::sZero();
+		History.SimulateSingleStep(); // First edge starts at zero length, then the second edge separates it.
+		Fresh.SimulateSingleStep();
+		CHECK(FreshMotion->GetVertex(1).mPosition.LengthSq() > 0.0f);
+		for (uint Index = 0; Index < Shared->mVertices.size(); ++Index)
+		{
+			CHECK(HistoryMotion->GetVertex(Index).mPosition == FreshMotion->GetVertex(Index).mPosition);
+			CHECK(HistoryMotion->GetVertex(Index).mVelocity == FreshMotion->GetVertex(Index).mVelocity);
+			CHECK(HistoryMotion->GetVertex(Index).mConstraintDelta == FreshMotion->GetVertex(Index).mConstraintDelta);
+		}
+	}
+
+	TEST_CASE("TestSkippedVolumeFirstSweepClearsPreviousMultiplier")
+	{
+		PhysicsTestContext History;
+		PhysicsTestContext Fresh;
+		History.ZeroGravity();
+		Fresh.ZeroGravity();
+		Ref<SoftBodySharedSettings> Shared = new SoftBodySharedSettings;
+		Shared->mVertices.push_back(SoftBodySharedSettings::Vertex(Float3(0, 0, 0), Float3(0, 0, 0), 0.0f));
+		Shared->mVertices.push_back(SoftBodySharedSettings::Vertex(Float3(0, 0.001f, 0)));
+		Shared->mVertices.push_back(SoftBodySharedSettings::Vertex(Float3(0, 0, 0.001f)));
+		Shared->mVertices.push_back(SoftBodySharedSettings::Vertex(Float3(1, 0, 0), Float3(0, 0, 0), 0.0f));
+		Shared->mVertices.push_back(SoftBodySharedSettings::Vertex(Float3(0, 2, 0), Float3(0, 0, 0), 0.0f));
+		Shared->mVertices.push_back(SoftBodySharedSettings::Vertex(Float3(0, 0, 2), Float3(0, 0, 0), 0.0f));
+		Shared->mVolumeConstraints.emplace_back(0, 1, 2, 3, 1.0e-16f);
+		Shared->mVolumeConstraints.back().mSixRestVolume = 1.0f;
+		Shared->mEdgeConstraints.emplace_back(1, 4, 0.0001f);
+		Shared->mEdgeConstraints.emplace_back(2, 5, 0.0001f);
+		Shared->mEdgeConstraints[0].mRestLength = 1.0f;
+		Shared->mEdgeConstraints[1].mRestLength = 1.0f;
+		Shared->Optimize();
+		Body &HistoryBody = CreateSoft(History, Shared, 2);
+		Body &FreshBody = CreateSoft(Fresh, Shared, 2);
+		auto *HistoryMotion = static_cast<SoftBodyMotionProperties *>(HistoryBody.GetMotionProperties());
+		auto *FreshMotion = static_cast<SoftBodyMotionProperties *>(FreshBody.GetMotionProperties());
+		History.SimulateSingleStep(); // The nearly collinear tetrahedron creates a retained multiplier.
+		CHECK(HistoryMotion->GetVertex(1).mConstraintDelta.LengthSq() > 0.0f);
+		for (uint Index : { 1u, 2u })
+		{
+			HistoryMotion->GetVertex(Index).mPosition = Vec3::sZero();
+			HistoryMotion->GetVertex(Index).mVelocity = Vec3::sZero();
+			FreshMotion->GetVertex(Index).mPosition = Vec3::sZero();
+			FreshMotion->GetVertex(Index).mVelocity = Vec3::sZero();
+		}
+		History.SimulateSingleStep(); // The volume is degenerate before the edges separate its vertices.
+		Fresh.SimulateSingleStep();
+		CHECK(FreshMotion->GetVertex(1).mPosition.LengthSq() > 0.0f);
+		CHECK(FreshMotion->GetVertex(2).mPosition.LengthSq() > 0.0f);
+		for (uint Index = 0; Index < Shared->mVertices.size(); ++Index)
+		{
+			CHECK(HistoryMotion->GetVertex(Index).mPosition == FreshMotion->GetVertex(Index).mPosition);
+			CHECK(HistoryMotion->GetVertex(Index).mVelocity == FreshMotion->GetVertex(Index).mVelocity);
+			CHECK(HistoryMotion->GetVertex(Index).mConstraintDelta == FreshMotion->GetVertex(Index).mConstraintDelta);
 		}
 	}
 
